@@ -21,7 +21,7 @@ pub use self::title_screen::{Executable, TitleScreen};
 pub use self::trip_files::{TripManagement, TripManagementState};
 pub use self::ui::{
     checkbox_per_mode, cmp_count, cmp_dist, cmp_duration, color_for_mode, percentage_bar,
-    FilePicker,
+    FilePicker, FileSaver, FileSaverContents,
 };
 pub use self::waypoints::{InputWaypoints, WaypointID};
 use crate::AppLike;
@@ -54,7 +54,7 @@ mod updater;
 mod waypoints;
 
 // Update this ___before___ pushing the commit with "[rebuild] [release]".
-const NEXT_RELEASE: &str = "0.3.41";
+const NEXT_RELEASE: &str = "0.3.50";
 
 /// Returns the version of A/B Street to link to. When building for a release, this points to that
 /// new release. Otherwise it points to the current dev version.
@@ -95,6 +95,7 @@ pub fn nice_map_name(name: &MapName) -> &str {
         "au" => match (name.city.city.as_ref(), name.map.as_ref()) {
             ("melbourne", "brunswick") => "Melbourne (Brunswick)",
             ("melbourne", "dandenong") => "Melbourne (Dandenong)",
+            ("melbourne", "maribyrnong") => "Melbourne (Maribyrnong)",
             _ => &name.map,
         },
         "at" => match (name.city.city.as_ref(), name.map.as_ref()) {
@@ -112,6 +113,8 @@ pub fn nice_map_name(name: &MapName) -> &str {
         },
         "ca" => match (name.city.city.as_ref(), name.map.as_ref()) {
             ("montreal", "plateau") => "Montréal (Plateau)",
+            ("toronto", "dufferin") => "Toronto (Dufferin)",
+            ("toronto", "sw") => "Toronto (southwest)",
             _ => &name.map,
         },
         "ch" => match (name.city.city.as_ref(), name.map.as_ref()) {
@@ -141,6 +144,7 @@ pub fn nice_map_name(name: &MapName) -> &str {
             _ => &name.map,
         },
         "fr" => match (name.city.city.as_ref(), name.map.as_ref()) {
+            ("brest", "city") => "Brest",
             ("charleville_mezieres", "secteur1") => "Charleville-Mézières (secteur 1)",
             ("charleville_mezieres", "secteur2") => "Charleville-Mézières (secteur 2)",
             ("charleville_mezieres", "secteur3") => "Charleville-Mézières (secteur 3)",
@@ -152,6 +156,9 @@ pub fn nice_map_name(name: &MapName) -> &str {
             ("paris", "south") => "Paris (south)",
             ("paris", "east") => "Paris (east)",
             ("paris", "west") => "Paris (west)",
+            ("strasbourg", "center") => "Strasbourg (center)",
+            ("strasbourg", "north") => "Strasbourg (north)",
+            ("strasbourg", "south") => "Strasbourg (south)",
             _ => &name.map,
         },
         "gb" => match (name.city.city.as_ref(), name.map.as_ref()) {
@@ -162,13 +169,16 @@ pub fn nice_map_name(name: &MapName) -> &str {
             ("bailrigg", "center") => "Bailrigg (Lancaster)",
             ("bath_riverside", "center") => "Bath Riverside",
             ("bicester", "center") => "Bicester",
+            ("birmingham", "center") => "Birmingham",
             ("bournemouth", "center") => "Bournemouth",
             ("bradford", "center") => "Bradford",
             ("brighton", "center") => "Brighton",
             ("brighton", "shoreham_by_sea") => "Shoreham-by-Sea",
             ("bristol", "east") => "East Bristol",
+            ("bristol", "south") => "South Bristol",
             ("burnley", "center") => "Burnley",
             ("cambridge", "north") => "North Cambridge",
+            ("cardiff", "north") => "Cardiff",
             ("castlemead", "center") => "Castlemead",
             ("chapelford", "center") => "Chapelford (Cheshire)",
             ("chapeltown_cohousing", "center") => "Chapeltown Cohousing",
@@ -182,11 +192,13 @@ pub fn nice_map_name(name: &MapName) -> &str {
             ("didcot", "center") => "Didcot (Harwell)",
             ("dunton_hills", "center") => "Dunton Hills",
             ("ebbsfleet", "center") => "Ebbsfleet (Dartford)",
+            ("edinburgh", "center") => "Edinburgh",
             ("exeter_red_cow_village", "center") => "Exeter Red Cow Village",
             ("glenrothes", "center") => "Glenrothes (Scotland)",
             ("great_kneighton", "center") => "Great Kneighton (Cambridge)",
             ("halsnhead", "center") => "Halsnead",
             ("hampton", "center") => "Hampton",
+            ("inverness", "center") => "Inverness",
             ("kergilliack", "center") => "Kergilliack",
             ("keighley", "center") => "Keighley",
             ("kidbrooke_village", "center") => "Kidbrooke Village",
@@ -217,6 +229,7 @@ pub fn nice_map_name(name: &MapName) -> &str {
             ("oxford", "center") => "Oxford",
             ("poundbury", "center") => "Poundbury",
             ("priors_hall", "center") => "Priors Hall",
+            ("sheffield", "center") => "Sheffield",
             ("sheffield", "darnall") => "Darnall",
             ("st_albans", "center") => "St Albans",
             ("taunton_firepool", "center") => "Taunton Firepool",
@@ -232,6 +245,10 @@ pub fn nice_map_name(name: &MapName) -> &str {
             ("wynyard", "center") => "Wynyard",
             _ => &name.map,
         },
+        "hk" => match (name.city.city.as_ref(), name.map.as_ref()) {
+            ("kowloon", "tsim_sha_tsui") => "Tsim Sha Tsui",
+            _ => &name.map,
+        },
         "il" => match (name.city.city.as_ref(), name.map.as_ref()) {
             ("tel_aviv", "center") => "Tel Aviv (city center)",
             _ => &name.map,
@@ -242,12 +259,15 @@ pub fn nice_map_name(name: &MapName) -> &str {
         },
         "ir" => match (name.city.city.as_ref(), name.map.as_ref()) {
             ("tehran", "parliament") => "Tehran (near Parliament)",
-            // TODO I'm not naming the other 9 maps in Tehran, because I'm not sure yet the
-            // boundaries are the ones that a researcher needs.
             _ => &name.map,
         },
         "jp" => match (name.city.city.as_ref(), name.map.as_ref()) {
             ("hiroshima", "uni") => "Hiroshima University",
+            ("tokyo", "shibuya") => "Shibuya",
+            _ => &name.map,
+        },
+        "kr" => match (name.city.city.as_ref(), name.map.as_ref()) {
+            ("seoul", "itaewon_dong") => "Itaewon Dong",
             _ => &name.map,
         },
         "ly" => match (name.city.city.as_ref(), name.map.as_ref()) {
@@ -289,8 +309,10 @@ pub fn nice_map_name(name: &MapName) -> &str {
             ("lynnwood", "hazelwood") => "Lynnwood, WA",
             ("milwaukee", "downtown") => "Downtown Milwaukee",
             ("milwaukee", "oak_creek") => "Oak Creek",
+            ("missoula", "center") => "Missoula",
             ("mt_vernon", "burlington") => "Burlington",
             ("mt_vernon", "downtown") => "Mt. Vernon",
+            ("new_haven", "center") => "New Haven",
             ("nyc", "fordham") => "Fordham",
             ("nyc", "lower_manhattan") => "Lower Manhattan",
             ("nyc", "midtown_manhattan") => "Midtown Manhattan",
@@ -337,7 +359,9 @@ pub fn nice_country_name(code: &str) -> &str {
         "il" => "Israel",
         "in" => "India",
         "ir" => "Iran",
+        "hk" => "Hong Kong",
         "jp" => "Japan",
+        "kr" => "South Korea",
         "ly" => "Libya",
         "nl" => "Netherlands",
         "nz" => "New Zealand",
@@ -371,7 +395,7 @@ pub fn find_exe(cmd: &str) -> String {
         }
     }
     // When running from the .zip release
-    directories.push(".".to_string());
+    directories.push("./binaries".to_string());
 
     for dir in directories {
         // Apparently std::path on Windows doesn't do any of this correction. We could build up a

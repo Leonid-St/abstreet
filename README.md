@@ -3,6 +3,21 @@
 [![DOI](https://zenodo.org/badge/135952436.svg)](https://zenodo.org/badge/latestdoi/135952436)
 [![](https://dcbadge.vercel.app/api/server/nCvMD4xj4K?style=flat)](https://discord.gg/nCvMD4xj4K)
 
+## 2025 Update
+
+As of 2025, this project has turned into several others, developed by [A/B Street Ltd](https://abstreet.uk):
+
+- [Network Planning Workspace](https://npw.scot/), a cycle network planning tool
+- [Low-Traffic neighbourhood tool](https://a-b-street.github.io/ltn)
+- [Plan Your Active Travel Schemes](https://plan.activetravelengland.gov.uk) for sketching changes to infrastructure
+- [15-minute neighbourhood tool](https://a-b-street.github.io/15m) for exploring how land use and transportation interact
+- [Severance Snape](https://dabreegster.github.io/severance_snape) to explore
+  how far walking routes detour to cross big roads
+- [od2net](https://github.com/a-b-street/od2net) to calculate the most
+  important roads to prioritize for cycling
+
+## Project overview
+
 Ever been stuck in traffic on a bus, wondering why is there legal street parking
 instead of a dedicated bus lane? A/B Street is a project to plan, simulate, and
 communicate visions for making cities friendlier to people walking, biking, and
@@ -16,10 +31,10 @@ and educate the public about
 The project works anywhere in the world, thanks to
 [OpenStreetMap](https://www.openstreetmap.org/about).
 
-- Run it on [your web browser](http://play.abstreet.org/0.3.40/abstreet.html),
-  [Windows](https://github.com/a-b-street/abstreet/releases/download/v0.3.40/abstreet_windows_v0_3_40.zip),
-  [Mac](https://github.com/a-b-street/abstreet/releases/download/v0.3.40/abstreet_mac_v0_3_40.zip),
-  [Linux](https://github.com/a-b-street/abstreet/releases/download/v0.3.40/abstreet_linux_v0_3_40.zip),
+- Run it on [your web browser](https://play.abstreet.org/0.3.49/abstreet.html),
+  [Windows](https://github.com/a-b-street/abstreet/releases/download/v0.3.49/abstreet_windows_v0_3_49.zip),
+  [Mac](https://github.com/a-b-street/abstreet/releases/download/v0.3.49/abstreet_mac_v0_3_49.zip),
+  [Linux](https://github.com/a-b-street/abstreet/releases/download/v0.3.49/abstreet_linux_v0_3_49.zip),
   [FreeBSD](https://www.freshports.org/games/abstreet/), or
   [read all instructions](https://a-b-street.github.io/docs/user/index.html)
 - [build from source](https://a-b-street.github.io/docs/tech/dev/index.html)

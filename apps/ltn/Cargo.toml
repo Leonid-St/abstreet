@@ -8,7 +8,7 @@ edition = "2021"
 crate-type = ["cdylib", "lib"]
 
 [features]
-default = ["map_gui/native", "widgetry/native-backend"]
+default = ["home", "map_gui/native", "widgetry/native-backend"]
 wasm = ["getrandom/js", "map_gui/wasm", "wasm-bindgen", "widgetry/wasm-backend"]
 
 [dependencies]
@@ -17,13 +17,14 @@ abstutil = { path = "../../abstutil" }
 anyhow = { workspace = true }
 blockfinding = { path = "../../blockfinding" }
 contour = { workspace = true }
-csv = "1.1.4"
-flate2 = "1.0.20"
-futures-channel = { version = "0.3.12"}
+csv = { workspace = true }
+flate2 = { workspace = true }
+futures-channel = { workspace = true }
 geo = { workspace = true }
 geojson = { workspace = true }
-geom = { path = "../../geom" }
+geom = { workspace = true }
 getrandom = { workspace = true, optional = true }
+home = { version = "0.5.5", optional = true }
 lazy_static = "1.4.0"
 log = { workspace = true }
 maplit = "1.0.2"
@@ -32,11 +33,15 @@ map_model = { path = "../../map_model" }
 md5 = "0.7.0"
 rand = { workspace = true }
 rand_xorshift = { workspace = true }
-regex = "1.5.5"
-serde = { workspace = true }
+regex = "1.8.1"
+serde = { workspace = true, features=["derive"] }
 serde_json = { workspace = true }
 osm2streets = { git = "https://github.com/a-b-street/osm2streets" }
 synthpop = { path = "../../synthpop" }
 wasm-bindgen = { workspace = true, optional = true }
 widgetry = { path = "../../widgetry" }
 structopt = { workspace = true }
+
+[dev-dependencies]
+tests = { path = "../../tests" }
+fs-err = { workspace = true }

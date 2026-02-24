@@ -68,6 +68,10 @@ impl AppwidePanel {
                 ))),
                 "Crossings" => Some(Transition::Replace(pages::Crossings::new_state(ctx, app))),
                 "Predict impact" => Some(launch_impact(ctx, app)),
+                "Cycle network" => Some(Transition::Replace(pages::CycleNetwork::new_state(
+                    ctx, app,
+                ))),
+                "Census" => Some(Transition::Replace(pages::Census::new_state(ctx, app))),
                 _ => unreachable!(),
             };
         }
@@ -95,7 +99,7 @@ impl AppwidePanel {
 
 fn launch_impact(ctx: &mut EventCtx, app: &mut App) -> Transition {
     if &app.per_map.impact.map == app.per_map.map.get_name()
-        && app.per_map.impact.change_key == app.edits().get_change_key()
+        && app.per_map.impact.map_edit_key == app.per_map.map.get_edits_change_key()
     {
         return Transition::Replace(pages::ShowImpactResults::new_state(ctx, app));
     }
@@ -180,6 +184,18 @@ fn make_top_panel(ctx: &mut EventCtx, app: &App, mode: Mode) -> Panel {
                     .disabled_tooltip("Not supported here yet")
                     .build_def(ctx)
             },
+            if mode == Mode::CycleNetwork {
+                current_mode(ctx, "Cycle network")
+            } else {
+                ctx.style().btn_outline.text("Cycle network").build_def(ctx)
+            },
+            if mode == Mode::Census {
+                current_mode(ctx, "Census")
+            } else if app.per_map.map.all_census_zones().is_empty() {
+                Widget::nothing()
+            } else {
+                ctx.style().btn_outline.text("Census").build_def(ctx)
+            },
         ])
         .centered_vert()
     } else {
@@ -240,7 +256,7 @@ fn make_left_panel(ctx: &mut EventCtx, app: &App, top_panel: &Panel, mode: Mode)
                 .build_widget(ctx, "hide proposals")
                 .align_right(),
         );
-        col.push(app.per_map.proposals.to_widget_expanded(ctx, app));
+        col.push(app.per_map.proposals.to_widget_expanded(ctx));
     } else {
         col.push(
             ctx.style()

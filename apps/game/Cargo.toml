@@ -22,14 +22,14 @@ blockfinding = { path = "../../blockfinding" }
 collisions = { path = "../../collisions" }
 colorous = { workspace = true }
 contour = { workspace = true }
-csv = "1.1.4"
+csv = { workspace = true }
 downcast-rs = "1.2.0"
-enumset = "1.0.3"
+enumset = "1.1.3"
 fs-err = { workspace = true }
-futures-channel = { version = "0.3.12"}
+futures-channel = { workspace = true }
 geo = { workspace = true }
 geojson = { workspace = true }
-geom = { path = "../../geom" }
+geom = { workspace = true }
 getrandom = { workspace = true, optional = true }
 instant = { workspace = true }
 kml = { path = "../../kml" }
@@ -43,7 +43,7 @@ petname = "1.1.3"
 popdat = { path = "../../popdat" }
 rand = { workspace = true }
 rand_xorshift = { workspace = true }
-serde = { workspace = true }
+serde = { workspace = true, features=["derive"] }
 serde_json = { workspace = true }
 svg_face = "0.1.3"
 sim = { path = "../../sim" }

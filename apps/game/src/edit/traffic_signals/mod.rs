@@ -7,7 +7,7 @@ use geom::{Distance, Line, Polygon, Pt2D};
 use map_gui::options::TrafficSignalStyle;
 use map_gui::render::{traffic_signal, DrawMovement, DrawOptions};
 use map_model::{
-    ControlTrafficSignal, EditCmd, EditIntersection, IntersectionID, MovementID, Stage, StageType,
+    ControlTrafficSignal, EditIntersectionControl, IntersectionID, MovementID, Stage, StageType,
     TurnPriority,
 };
 use widgetry::tools::PopupMsg;
@@ -350,7 +350,7 @@ impl State<App> for TrafficSignalEditor {
                     for signal in BundleEdits::get_current(app, &self.members).signals {
                         let ts = signal.export(&app.primary.map);
                         abstio::write_json(
-                            format!("traffic_signal_data/{}.json", ts.intersection_osm_node_id),
+                            format!("traffic_signal_{}.json", ts.intersection_osm_node_id),
                             &ts,
                         );
                     }
@@ -555,7 +555,10 @@ fn make_top_panel(ctx: &mut EventCtx, app: &App, can_undo: bool, can_redo: bool)
                 .btn_outline
                 .text("Export")
                 .tooltip(Text::from_multiline(vec![
-                    Line("This will create a JSON file in traffic_signal_data/.").small(),
+                    Line(
+                        "This will create a JSON file in the directory where A/B Street is running",
+                    )
+                    .small(),
                     Line(
                         "Contribute this to map how this traffic signal is currently timed in \
                      real life.",
@@ -802,11 +805,12 @@ impl BundleEdits {
         let mut edits = app.primary.map.get_edits().clone();
         // TODO Can we batch these commands somehow, so undo/redo in edit mode behaves properly?
         for signal in self.signals {
-            edits.commands.push(EditCmd::ChangeIntersection {
-                i: signal.id,
-                old: app.primary.map.get_i_edit(signal.id),
-                new: EditIntersection::TrafficSignal(signal.export(&app.primary.map)),
-            });
+            edits
+                .commands
+                .push(app.primary.map.edit_intersection_cmd(signal.id, |new| {
+                    new.control =
+                        EditIntersectionControl::TrafficSignal(signal.export(&app.primary.map));
+                }));
         }
         apply_map_edits(ctx, app, edits);
     }

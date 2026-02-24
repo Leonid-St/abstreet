@@ -3,25 +3,23 @@ use std::collections::BTreeSet;
 use anyhow::Result;
 
 use geom::{Distance, Polygon};
-use map_gui::tools::DrawSimpleRoadLabels;
 use widgetry::mapspace::{World, WorldOutcome};
 use widgetry::tools::{Lasso, PopupMsg};
 use widgetry::{
     Color, Drawable, EventCtx, GeomBatch, GfxCtx, Key, Line, Outcome, Panel, State, Text, TextExt,
-    Widget,
+    Toggle, Widget,
 };
 
-use crate::components::{AppwidePanel, Mode};
+use crate::components::{legend_entry, AppwidePanel, Mode};
 use crate::logic::{BlockID, Partitioning};
 use crate::render::colors;
-use crate::{mut_partitioning, pages, render, App, NeighbourhoodID, Transition};
+use crate::{mut_partitioning, pages, App, NeighbourhoodID, Transition};
 
 pub struct SelectBoundary {
     appwide_panel: AppwidePanel,
     left_panel: Panel,
     id: NeighbourhoodID,
     world: World<BlockID>,
-    draw_boundary_roads: Drawable,
     frontier: BTreeSet<BlockID>,
 
     orig_partitioning: Partitioning,
@@ -51,13 +49,7 @@ impl SelectBoundary {
             );
         }
 
-        if app.per_map.draw_all_road_labels.is_none() {
-            app.per_map.draw_all_road_labels = Some(DrawSimpleRoadLabels::all_roads(
-                ctx,
-                app,
-                colors::ROAD_LABEL,
-            ));
-        }
+        app.calculate_draw_all_local_road_labels(ctx);
 
         // Make sure we clear this state if we ever modify neighbourhood boundaries
         if let pages::EditMode::Shortcuts(ref mut maybe_focus) = app.session.edit_mode {
@@ -74,7 +66,6 @@ impl SelectBoundary {
             left_panel,
             id,
             world: World::new(),
-            draw_boundary_roads: render::draw_boundary_roads(ctx, app),
             frontier: BTreeSet::new(),
 
             orig_partitioning: app.partitioning().clone(),
@@ -165,7 +156,6 @@ impl SelectBoundary {
                     self.add_block(ctx, app, changed);
                 }
 
-                self.draw_boundary_roads = render::draw_boundary_roads(ctx, app);
                 self.left_panel = make_panel(ctx, app, self.id, &self.appwide_panel.top_panel);
             }
             Err(err) => {
@@ -198,9 +188,19 @@ impl SelectBoundary {
         if self.currently_have_block(app, id) {
             mut_partitioning!(app).remove_block_from_neighbourhood(&app.per_map.map, id)
         } else {
-            // Ignore the return value if the old neighbourhood is deleted
-            mut_partitioning!(app).transfer_block(&app.per_map.map, id, self.id)?;
-            Ok(None)
+            match mut_partitioning!(app).transfer_blocks(&app.per_map.map, vec![id], self.id) {
+                // Ignore the return value if the old neighbourhood is deleted
+                Ok(_) => Ok(None),
+                Err(err) => {
+                    if app.session.add_intermediate_blocks {
+                        let mut add_all = app.partitioning().find_intermediate_blocks(self.id, id);
+                        add_all.push(id);
+                        mut_partitioning!(app).transfer_blocks(&app.per_map.map, add_all, self.id)
+                    } else {
+                        Err(err)
+                    }
+                }
+            }
         }
     }
 
@@ -234,12 +234,13 @@ impl SelectBoundary {
                 let mut changed = false;
                 let mut still_todo = Vec::new();
                 timer.start_iter("try to add blocks", add_blocks.len());
+                // TODO Sometimes it'd help to add all at once!
                 for block_id in add_blocks.drain(..) {
                     timer.next();
                     if self.frontier.contains(&block_id) {
-                        if let Ok(_) = mut_partitioning!(app).transfer_block(
+                        if let Ok(_) = mut_partitioning!(app).transfer_blocks(
                             &app.per_map.map,
-                            block_id,
+                            vec![block_id],
                             self.id,
                         ) {
                             changed = true;
@@ -266,7 +267,6 @@ impl SelectBoundary {
             for id in app.partitioning().all_block_ids() {
                 self.add_block(ctx, app, id);
             }
-            self.draw_boundary_roads = render::draw_boundary_roads(ctx, app);
         });
     }
 }
@@ -278,7 +278,16 @@ impl State<App> for SelectBoundary {
                 self.lasso = None;
                 self.add_blocks_freehand(ctx, app, polygon);
                 self.left_panel = make_panel(ctx, app, self.id, &self.appwide_panel.top_panel);
+                return Transition::Keep;
             }
+
+            if let Outcome::Clicked(x) = self.left_panel.event(ctx) {
+                if x == "Cancel" {
+                    self.lasso = None;
+                    self.left_panel = make_panel(ctx, app, self.id, &self.appwide_panel.top_panel);
+                }
+            }
+
             return Transition::Keep;
         }
 
@@ -296,8 +305,8 @@ impl State<App> for SelectBoundary {
         {
             return t;
         }
-        if let Outcome::Clicked(x) = self.left_panel.event(ctx) {
-            match x.as_ref() {
+        match self.left_panel.event(ctx) {
+            Outcome::Clicked(x) => match x.as_ref() {
                 "Cancel" => {
                     // TODO If we destroyed the current neighbourhood, then we cancel, we'll pop
                     // back to a different neighbourhood than we started with. And also the original
@@ -313,7 +322,13 @@ impl State<App> for SelectBoundary {
                     self.left_panel = make_panel_for_lasso(ctx, &self.appwide_panel.top_panel);
                 }
                 _ => unreachable!(),
+            },
+            Outcome::Changed(_) => {
+                app.session.add_intermediate_blocks = self
+                    .left_panel
+                    .is_checked("add intermediate blocks automatically");
             }
+            _ => {}
         }
 
         match self.world.event(ctx) {
@@ -343,11 +358,15 @@ impl State<App> for SelectBoundary {
     fn draw(&self, g: &mut GfxCtx, app: &App) {
         self.world.draw(g);
         g.redraw(&self.draw_last_error);
-        self.draw_boundary_roads.draw(g);
         self.appwide_panel.draw(g);
         self.left_panel.draw(g);
+        app.per_map
+            .draw_all_local_road_labels
+            .as_ref()
+            .unwrap()
+            .draw(g);
+        app.per_map.draw_major_road_labels.draw(g);
         app.session.layers.draw(g, app);
-        app.per_map.draw_all_road_labels.as_ref().unwrap().draw(g);
         if let Some(ref lasso) = self.lasso {
             lasso.draw(g);
         }
@@ -379,6 +398,12 @@ fn make_panel(ctx: &mut EventCtx, app: &App, id: NeighbourhoodID, top_panel: &Pa
                 Line(" and paint over blocks to remove"),
             ])
             .into_widget(ctx),
+            Toggle::checkbox(
+                ctx,
+                "add intermediate blocks automatically",
+                None,
+                app.session.add_intermediate_blocks,
+            ),
             format!(
                 "Neighbourhood area: {}",
                 app.partitioning().neighbourhood_area_km2(id)
@@ -402,6 +427,12 @@ fn make_panel(ctx: &mut EventCtx, app: &App, id: NeighbourhoodID, top_panel: &Pa
                     .build_def(ctx),
             ]),
             Widget::placeholder(ctx, "warning"),
+            legend_entry(
+                ctx,
+                colors::BLOCK_IN_BOUNDARY,
+                "block part of current neighbourhood",
+            ),
+            legend_entry(ctx, colors::BLOCK_IN_FRONTIER, "block could be added"),
         ]),
     )
     .build(ctx)
@@ -420,6 +451,11 @@ fn make_panel_for_lasso(ctx: &mut EventCtx, top_panel: &Panel) -> Panel {
                 Line(" to select the blocks to add to this neighbourhood"),
             ])
             .into_widget(ctx),
+            ctx.style()
+                .btn_solid_destructive
+                .text("Cancel")
+                .hotkey(Key::Escape)
+                .build_def(ctx),
         ]),
     )
     .build(ctx)

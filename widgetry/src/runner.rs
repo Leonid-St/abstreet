@@ -406,6 +406,9 @@ pub fn run<
     let mut last_update = Instant::now();
     // The user will not manage to click immediately after the window opens, so this initial value is simpler than an `Option<Instant>`
     let mut previous_left_click_at = Instant::now();
+
+    // Remember the last keycode, so that we can suppress a sequence like Alt+Tab
+    let mut previous_keycode = None;
     event_loop.run(move |event, _, control_flow| {
         if dump_raw_events {
             debug!("Event: {:?}", event);
@@ -422,6 +425,22 @@ pub fn run<
                 std::process::exit(0);
             }
             winit::event::Event::WindowEvent { event, .. } => {
+                use winit::event::VirtualKeyCode;
+
+                if let winit::event::WindowEvent::KeyboardInput { input, .. } = event {
+                    // TODO If someone happens to press and release alt, then press tab, we will
+                    // incorrectly suppress the tab. Attempts to add timing haven't worked so far,
+                    // so just accept this.
+                    if previous_keycode == Some(VirtualKeyCode::LAlt)
+                        && input.virtual_keycode == Some(VirtualKeyCode::Tab)
+                    {
+                        debug!("Skipping alt+tab event");
+                        previous_keycode = input.virtual_keycode;
+                        return;
+                    }
+                    previous_keycode = input.virtual_keycode;
+                }
+
                 let scale_factor = prerender.get_scale_factor();
                 if let Some(ev) =
                     Event::from_winit_event(event, scale_factor, previous_left_click_at)

@@ -13,7 +13,7 @@ use abstutil::wraparound_get;
 use geom::{Polygon, Pt2D, Ring};
 
 use map_model::{
-    CommonEndpoint, Direction, LaneID, Map, PathConstraints, RoadID, RoadSideID, SideOfRoad,
+    osm, CommonEndpoint, Direction, LaneID, Map, PathConstraints, RoadID, RoadSideID, SideOfRoad,
 };
 
 /// A block is defined by a perimeter that traces along the sides of roads. Inside the perimeter,
@@ -69,7 +69,7 @@ impl Perimeter {
         loop {
             let i = map.get_i(current_intersection);
             if i.is_border() {
-                bail!("hit the map boundary");
+                bail!("hit the map boundary at {}", i.orig_id);
             }
             let mut sorted_roads = i.get_road_sides_sorted(map);
             sorted_roads.retain(|id| !skip.contains(&id.road));
@@ -158,6 +158,13 @@ impl Perimeter {
             if r.is_light_rail() {
                 skip.insert(r.id);
             } else if !PathConstraints::Car.can_use_road(r, map) {
+                skip.insert(r.id);
+            } else if r.orig_id.osm_way_id == osm::WayID(700169412)
+                || r.orig_id.osm_way_id == osm::WayID(2800303)
+            {
+                // TODO Hack to avoid the A27 bridge in Chichester
+                // Note that https://www.openstreetmap.org/way/700169409 isn't the ID to skip,
+                // because osm2streets merges roads, and this ID arbitrarily disappears here
                 skip.insert(r.id);
             }
         }
@@ -591,8 +598,28 @@ impl Perimeter {
             // dead-end, or connects to some other road we didn't import. We'll just trace around
             // it like a normal dead-end road.
             let mut pl = match pair[0].side {
-                SideOfRoad::Right => road1.center_pts.must_shift_right(road1.get_half_width()),
-                SideOfRoad::Left => road1.center_pts.must_shift_left(road1.get_half_width()),
+                SideOfRoad::Right => road1
+                    .center_pts
+                    .shift_right(road1.get_half_width())
+                    // TODO Remove after fixing whatever map import error allows a bad PolyLine to
+                    // wind up here at all
+                    .unwrap_or_else(|err| {
+                        warn!(
+                            "Can't get right edge of {} ({}): {}",
+                            road1.id, err, road1.orig_id
+                        );
+                        road1.center_pts.clone()
+                    }),
+                SideOfRoad::Left => road1
+                    .center_pts
+                    .shift_left(road1.get_half_width())
+                    .unwrap_or_else(|err| {
+                        warn!(
+                            "Can't get left edge of {} ({}): {}",
+                            road1.id, err, road1.orig_id
+                        );
+                        road1.center_pts.clone()
+                    }),
             };
             if lane1.dir == Direction::Back {
                 pl = pl.reversed();

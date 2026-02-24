@@ -8,12 +8,14 @@ edition = "2021"
 abstio = { path = "../abstio" }
 abstutil = { path = "../abstutil" }
 anyhow = { workspace = true }
-csv = "1.1.4"
+csv = { workspace = true }
+elevation = { git = "https://github.com/dabreegster/elevation" }
 fs-err = { workspace = true }
-geom = { path = "../geom" }
+geom = { workspace = true }
 kml = { path = "../kml" }
 log = { workspace = true }
 osm2streets = { git = "https://github.com/a-b-street/osm2streets" }
+popgetter = { path = "../popgetter" }
 raw_map = { path = "../raw_map" }
-serde = { workspace = true }
+serde = { workspace = true, features=["derive"] }
 streets_reader = { git = "https://github.com/a-b-street/osm2streets" }

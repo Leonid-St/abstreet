@@ -1,5 +1,6 @@
 //! This runs a simulation without any graphics and serves a very basic API to control things. See
-//! https://a-b-street.github.io/docs/tech/dev/api.html for documentation. To run this:
+//! https://a-b-street.github.io/docs/tech/dev/api.html for documentation and
+//! https://github.com/mhabedank/abstreet-docker/ for an example of using with Docker. To run this:
 //!
 //! > cd headless; cargo run -- --port=1234
 //! > curl http://localhost:1234/sim/get-time
@@ -15,6 +16,7 @@ extern crate anyhow;
 extern crate log;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::net::IpAddr;
 use std::sync::RwLock;
 
 use anyhow::Result;
@@ -28,7 +30,7 @@ use abstio::MapName;
 use abstutil::{serialize_btreemap, Timer};
 use geom::{Distance, Duration, FindClosest, LonLat, Time};
 use map_model::{
-    CompressedMovementID, ControlTrafficSignal, EditCmd, EditIntersection, IntersectionID, Map,
+    CompressedMovementID, ControlTrafficSignal, EditIntersectionControl, IntersectionID, Map,
     MovementID, PermanentMapEdits, RoadID, TurnID,
 };
 use sim::{
@@ -56,9 +58,16 @@ lazy_static::lazy_static! {
     about = "Simulate traffic with a JSON API, not a GUI"
 )]
 struct Args {
+    /// What IP to run the JSON API on.
+    #[structopt(long, default_value = "127.0.0.1")]
+    ip: IpAddr,
     /// What port to run the JSON API on.
     #[structopt(long)]
     port: u16,
+    /// If specified, start with this scenario loaded instead of the Montlake weekday default. Use
+    /// `/sim/load` to change this after startup or control more options.
+    #[structopt(long)]
+    scenario: Option<String>,
     /// An arbitrary number to seed the random number generator. This is input to the deterministic
     /// simulation, so different values affect results.
     // TODO default_value can only handle strings, so copying SimFlags::RNG_SEED
@@ -77,13 +86,16 @@ async fn main() {
         let mut load = LOAD.write().unwrap();
         load.rng_seed = args.rng_seed;
         load.opts = args.opts;
+        if let Some(path) = args.scenario {
+            load.scenario = path;
+        }
 
         let (map, sim) = load.setup(&mut Timer::new("setup headless"));
         *MAP.write().unwrap() = map;
         *SIM.write().unwrap() = sim;
     }
 
-    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], args.port));
+    let addr = std::net::SocketAddr::from((args.ip, args.port));
     info!("Listening on http://{}", addr);
     let serve_future = Server::bind(&addr).serve(hyper::service::make_service_fn(|_| async {
         Ok::<_, hyper::Error>(hyper::service::service_fn(serve_req))
@@ -215,11 +227,9 @@ fn handle_command(
             // incremental_edit_traffic_signal is the cheap option, but since we may need to call
             // get-edits later, go through the proper flow.
             let mut edits = map.get_edits().clone();
-            edits.commands.push(EditCmd::ChangeIntersection {
-                i: id,
-                old: map.get_i_edit(id),
-                new: EditIntersection::TrafficSignal(ts.export(map)),
-            });
+            edits.commands.push(map.edit_intersection_cmd(id, |new| {
+                new.control = EditIntersectionControl::TrafficSignal(ts.export(map));
+            }));
             map.must_apply_edits(edits, &mut Timer::throwaway());
             map.recalculate_pathfinding_after_edits(&mut Timer::throwaway());
 

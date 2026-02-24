@@ -1,5 +1,7 @@
 [workspace]
 
+resolver = "2"
+
 members = [
   "abstio",
   "abstutil",
@@ -8,7 +10,6 @@ members = [
   "cli",
   "collisions",
   "convert_osm",
-  "geom",
   "headless",
   "importer",
   "kml",
@@ -16,12 +17,12 @@ members = [
   "map_model",
   "piggyback",
   "popdat",
+  "popgetter",
   "raw_map",
   "sim",
   "synthpop",
   "tests",
   "traffic_seitan",
-  "traffic_signal_data",
   "updater",
   "widgetry",
   "widgetry_demo",
@@ -37,36 +38,38 @@ opt-level = 3
 # Specify the versions for common dependencies just once here, instead of
 # repeating in a bunch of crates
 [workspace.dependencies]
-anyhow = "1.0.38"
+anyhow = "1.0.75"
 bincode = "1.3.1"
 colorous = "1.0.9"
 contour = "0.7.0"
-fs-err = "2.6.0"
-geo = "0.23.0"
-geojson = { version = "0.24.0", features = ["geo-types"] }
-getrandom = "0.2.3"
+csv = "1.2.0"
+flate2 = "1.0.26"
+fs-err = "2.9.0"
+futures = { version = "0.3.27"}
+futures-channel = { version = "0.3.29"}
+geo = "0.27.0"
+geojson = { version = "0.24.1", features = ["geo-types"] }
+geom = { git = "https://github.com/a-b-street/geom" }
+getrandom = "0.2.11"
 instant = "0.1.7"
-log = "0.4.14"
+log = "0.4.20"
 rand = "0.8.3"
 rand_xorshift = "0.3.0"
-serde = "1.0.123"
-serde_json = "1.0.61"
+serde = "1.0.195"
+serde_json = "1.0.108"
 structopt = "0.3.23"
-wasm-bindgen = "0.2.84"
-web-sys = "0.3.61"
+tokio = { version = "1.34.0", features=["full"] }
+wasm-bindgen = "0.2.88"
+web-sys = "0.3.65"
 
 # There's a circular dependency between this repo (abstreet) and osm2streets,
 # due to the 2 core dependency crates listed below. This patch is required to
 # avoid Cargo from getting confused.
 [patch."https://github.com/a-b-street/abstreet/"]
-geom = { path = "geom" }
 abstutil = { path = "abstutil" }
 
 [patch.crates-io]
 http-range-client = { git = "https://github.com/pka/http-range-client", rev = "e62f72ab3553a19f4166f73efd18b13b4c4164ec" }
-
-# awaiting release to avoid duplicated geojson dep
-geozero = { git = "https://github.com/georust/geozero", rev = "0c3d6209eea8aa37bd42e9e784b92f2087e7efb4" }
 
 # To temporarily work on dependencies locally, uncomment this
 # TODO Do not commit. Update each repo

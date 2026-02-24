@@ -1,10 +1,6 @@
-use abstutil::Counter;
-use map_gui::tools::{ColorNetwork, DrawSimpleRoadLabels};
 use widgetry::mapspace::{World, WorldOutcome};
 use widgetry::tools::{ChooseSomething, PromptInput};
-use widgetry::{
-    Choice, Color, DrawBaselayer, Drawable, EventCtx, GfxCtx, Outcome, Panel, State, Widget,
-};
+use widgetry::{Choice, Color, DrawBaselayer, EventCtx, GfxCtx, Outcome, Panel, State, Widget};
 
 use crate::components::{AppwidePanel, BottomPanel, Mode};
 use crate::render::colors;
@@ -14,8 +10,6 @@ pub struct PickArea {
     appwide_panel: AppwidePanel,
     bottom_panel: Panel,
     world: World<NeighbourhoodID>,
-    draw_over_roads: Drawable,
-    draw_boundary_roads: Drawable,
 }
 
 impl PickArea {
@@ -30,7 +24,7 @@ impl PickArea {
             app.session.edit_mode = pages::EditMode::Filters;
         }
 
-        let (world, draw_over_roads) = (make_world(ctx, app), draw_over_roads(ctx, app));
+        let world = make_world(ctx, app);
 
         let appwide_panel = AppwidePanel::new(ctx, app, Mode::PickArea);
         let bottom_panel = BottomPanel::new(
@@ -53,24 +47,10 @@ impl PickArea {
             .layers
             .event(ctx, &app.cs, Mode::PickArea, Some(&bottom_panel));
 
-        if app.per_map.draw_major_road_labels.is_none() {
-            app.per_map.draw_major_road_labels = Some(DrawSimpleRoadLabels::only_major_roads(
-                ctx,
-                app,
-                colors::ROAD_LABEL,
-            ));
-        }
-
         Box::new(Self {
             appwide_panel,
             bottom_panel,
             world,
-            draw_over_roads,
-            draw_boundary_roads: if app.session.layers.show_main_roads {
-                render::draw_main_roads(ctx, app)
-            } else {
-                render::draw_boundary_roads(ctx, app)
-            },
         })
     }
 }
@@ -90,6 +70,7 @@ impl State<App> for PickArea {
         {
             return t;
         }
+
         if let Outcome::Clicked(x) = self.bottom_panel.event(ctx) {
             if x == "Change draw style" {
                 return change_draw_style(ctx);
@@ -113,13 +94,11 @@ impl State<App> for PickArea {
 
     fn draw(&self, g: &mut GfxCtx, app: &App) {
         app.draw_with_layering(g, |g| self.world.draw(g));
-        self.draw_over_roads.draw(g);
 
         self.appwide_panel.draw(g);
         self.bottom_panel.draw(g);
+        app.per_map.draw_major_road_labels.draw(g);
         app.session.layers.draw(g, app);
-        self.draw_boundary_roads.draw(g);
-        app.per_map.draw_major_road_labels.as_ref().unwrap().draw(g);
         app.per_map.draw_all_filters.draw(g);
         app.per_map.draw_poi_icons.draw(g);
     }
@@ -144,11 +123,7 @@ fn make_world(ctx: &mut EventCtx, app: &App) -> World<NeighbourhoodID> {
                     world
                         .add(*id)
                         .hitbox(info.block.polygon.clone())
-                        .draw_color(Color::YELLOW.alpha(if info.suspicious_perimeter_roads {
-                            0.1
-                        } else {
-                            0.2
-                        }))
+                        .draw_color(Color::YELLOW.alpha(0.2))
                         .hover_alpha(0.5)
                         .clickable()
                         .build(ctx);
@@ -184,43 +159,10 @@ fn make_world(ctx: &mut EventCtx, app: &App) -> World<NeighbourhoodID> {
                         .clickable()
                         .build(ctx);
                 }
-                PickAreaStyle::Shortcuts => {
-                    world
-                        .add(*id)
-                        .hitbox(info.block.polygon.clone())
-                        // Slight lie, because draw_over_roads has to be drawn after the World
-                        .drawn_in_master_batch()
-                        .hover_color(colors::HOVER)
-                        .clickable()
-                        .build(ctx);
-                }
             }
         }
     });
     world
-}
-
-fn draw_over_roads(ctx: &mut EventCtx, app: &App) -> Drawable {
-    if app.session.draw_neighbourhood_style != PickAreaStyle::Shortcuts {
-        return Drawable::empty(ctx);
-    }
-
-    let mut count_per_road = Counter::new();
-    let mut count_per_intersection = Counter::new();
-
-    for id in app.partitioning().all_neighbourhoods().keys() {
-        let neighbourhood = Neighbourhood::new(app, *id);
-        count_per_road.extend(neighbourhood.shortcuts.count_per_road);
-        count_per_intersection.extend(neighbourhood.shortcuts.count_per_intersection);
-    }
-
-    // TODO It's a bit weird to draw one heatmap covering streets in every neighbourhood. The
-    // shortcuts are calculated per neighbourhood, but now we're showing them all together, as if
-    // it's the impact prediction mode using a demand model.
-    let mut colorer = ColorNetwork::no_fading(app);
-    colorer.ranked_roads(count_per_road, &app.cs.good_to_bad_red);
-    colorer.ranked_intersections(count_per_intersection, &app.cs.good_to_bad_red);
-    colorer.build(ctx).unzoomed
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -228,7 +170,6 @@ pub enum PickAreaStyle {
     Simple,
     Cells,
     Quietness,
-    Shortcuts,
 }
 
 fn help() -> Vec<&'static str> {
@@ -250,7 +191,6 @@ fn change_draw_style(ctx: &mut EventCtx) -> Transition {
                 "color areas by how much shortcutting they have",
                 PickAreaStyle::Quietness,
             ),
-            Choice::new("show shortcuts through all areas", PickAreaStyle::Shortcuts),
         ],
         Box::new(move |choice, _, app| {
             app.session.draw_neighbourhood_style = choice;

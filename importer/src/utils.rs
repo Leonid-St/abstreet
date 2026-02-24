@@ -85,9 +85,14 @@ pub async fn download_kml(
     fs_err::rename(tmp, output.replace(".bin", ".kml")).unwrap();
 }
 
-/// Uses osmium to clip the input .osm (or .pbf) against a polygon and produce some output.  Skips
-/// if the output exists.
-fn osmium(input: String, clipping_polygon: String, output: String, config: &ImporterConfiguration) {
+/// Uses osmium to clip the input .osm.xml or osm.pbf against a polygon and produce some output pbf
+/// file. Skips if the output exists.
+pub fn osmium(
+    input: String,
+    clipping_polygon: String,
+    output: String,
+    config: &ImporterConfiguration,
+) {
     if Path::new(&output).exists() {
         println!("- {} already exists", output);
         return;
@@ -109,7 +114,7 @@ fn osmium(input: String, clipping_polygon: String, output: String, config: &Impo
             .arg(output)
             .arg("-f")
             // Smaller files without author, timestamp, version
-            .arg("osm,add_metadata=false"),
+            .arg("pbf,add_metadata=false"),
     );
 }
 
@@ -139,12 +144,12 @@ pub async fn osm_to_raw(
     osmium(
         local_osm_file,
         boundary_polygon.clone(),
-        name.city.input_path(format!("osm/{}.osm", name.map)),
+        name.city.input_path(format!("osm/{}.osm.pbf", name.map)),
         config,
     );
 
     let map = convert_osm::convert(
-        name.city.input_path(format!("osm/{}.osm", name.map)),
+        name.city.input_path(format!("osm/{}.osm.pbf", name.map)),
         name.clone(),
         Some(boundary_polygon),
         opts,

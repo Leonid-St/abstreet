@@ -192,6 +192,8 @@ pub struct RoutingParams {
     ///
     /// TODO The route may cross one of these roads if it's the start or end!
     pub avoid_roads: BTreeSet<RoadID>,
+    /// Related to `avoid_roads`, but used as an optimization in map construction
+    pub only_use_roads: BTreeSet<RoadID>,
 
     /// Don't allow movements between these roads at all. Only affects vehicle routing, not
     /// pedestrian.
@@ -216,6 +218,7 @@ impl Default for RoutingParams {
 
             avoid_roads: BTreeSet::new(),
             avoid_movements_between: BTreeSet::new(),
+            only_use_roads: BTreeSet::new(),
         }
     }
 }

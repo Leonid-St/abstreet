@@ -47,23 +47,13 @@ pub struct NeighbourhoodInfo {
     /// Draw a special cone of light when focused on this neighbourhood. It doesn't change which
     /// roads can be edited.
     pub override_drawing_boundary: Option<Polygon>,
-    pub suspicious_perimeter_roads: bool,
 }
 
 impl NeighbourhoodInfo {
-    fn new(map: &Map, block: Block) -> Self {
-        let mut suspicious_perimeter_roads = false;
-        for r in &block.perimeter.roads {
-            if map.get_r(r.road).get_rank() == RoadRank::Local {
-                suspicious_perimeter_roads = true;
-                break;
-            }
-        }
-
+    fn new(block: Block) -> Self {
         Self {
             block,
             override_drawing_boundary: None,
-            suspicious_perimeter_roads,
         }
     }
 }
@@ -98,15 +88,24 @@ impl Partitioning {
     }
 
     pub fn seed_using_heuristics(map: &Map, timer: &mut Timer) -> Partitioning {
+        timer.start("seed partitioning with heuristics");
+
         timer.start("find single blocks");
-        let mut single_blocks = Vec::new();
-        let mut single_block_perims = Vec::new();
+        let input_single_blocks = Perimeter::find_all_single_blocks(map);
+        timer.stop("find single blocks");
 
         // Merge holes upfront. Otherwise, it's usually impossible to expand a boundary with a
         // block containing a hole. Plus, there's no known scenario when somebody would want to
         // make a neighbourhood boundary involve a hole.
-        let input = Perimeter::merge_holes(map, Perimeter::find_all_single_blocks(map));
+        timer.start("merge holes");
+        let input = Perimeter::merge_holes(map, input_single_blocks);
+        timer.stop("merge holes");
+
+        let mut single_blocks = Vec::new();
+        let mut single_block_perims = Vec::new();
+        timer.start_iter("fix deadends and blockify", input.len());
         for mut perim in input {
+            timer.next();
             // TODO Some perimeters don't blockify after collapsing dead-ends. So do this
             // upfront, and separately work on any blocks that don't show up.
             // https://github.com/a-b-street/abstreet/issues/841
@@ -116,7 +115,6 @@ impl Partitioning {
                 single_blocks.push(block);
             }
         }
-        timer.stop("find single blocks");
 
         timer.start("partition");
         let partitions = Perimeter::partition_by_predicate(single_block_perims, |r| {
@@ -132,7 +130,7 @@ impl Partitioning {
         }
         timer.stop("partition");
 
-        timer.start_iter("blockify", merged.len());
+        timer.start_iter("blockify merged", merged.len());
         let mut blocks = Vec::new();
         for perimeter in merged {
             timer.next();
@@ -150,7 +148,7 @@ impl Partitioning {
         for block in blocks {
             neighbourhoods.insert(
                 NeighbourhoodID(neighbourhoods.len()),
-                NeighbourhoodInfo::new(map, block),
+                NeighbourhoodInfo::new(block),
             );
         }
         let neighbourhood_id_counter = neighbourhoods.len();
@@ -178,31 +176,23 @@ impl Partitioning {
             }
         }
 
+        timer.stop("seed partitioning with heuristics");
         p
     }
 
-    // TODO Explain return value
-    pub fn transfer_block(
+    /// Add all specified blocks to new_owner. `Ok(None)` is success.  `Ok(Some(x))` is also
+    /// success, but means the old neighbourhood of SOME block in `add_all` is now gone and
+    /// replaced with something new. (This call shouldn't be used to remove multiple blocks at
+    /// once, since interpreting the result is confusing!)
+    pub fn transfer_blocks(
         &mut self,
         map: &Map,
-        id: BlockID,
+        add_all: Vec<BlockID>,
         new_owner: NeighbourhoodID,
     ) -> Result<Option<NeighbourhoodID>> {
-        let old_owner = self.block_to_neighbourhood(id);
-        assert_ne!(old_owner, new_owner);
-
         // Is the newly expanded neighbourhood a valid perimeter?
-        let new_owner_blocks: Vec<BlockID> = self
-            .block_to_neighbourhood
-            .iter()
-            .filter_map(|(block, neighbourhood)| {
-                if *neighbourhood == new_owner || *block == id {
-                    Some(*block)
-                } else {
-                    None
-                }
-            })
-            .collect();
+        let mut new_owner_blocks = self.neighbourhood_to_blocks(new_owner);
+        new_owner_blocks.extend(add_all.clone());
         let mut new_neighbourhood_blocks = self.make_merged_blocks(map, new_owner_blocks)?;
         if new_neighbourhood_blocks.len() != 1 {
             // This happens when a hole would be created by adding this block. There are probably
@@ -211,55 +201,53 @@ impl Partitioning {
         }
         let new_neighbourhood_block = new_neighbourhood_blocks.pop().unwrap();
 
-        // Is the old neighbourhood, minus this block, still valid?
-        // TODO refactor Neighbourhood to BlockIDs?
-        let old_owner_blocks: Vec<BlockID> = self
-            .block_to_neighbourhood
+        let old_owners: BTreeSet<NeighbourhoodID> = add_all
             .iter()
-            .filter_map(|(block, neighbourhood)| {
-                if *neighbourhood == old_owner && *block != id {
-                    Some(*block)
-                } else {
-                    None
-                }
-            })
+            .map(|block| self.block_to_neighbourhood[block])
             .collect();
-        if old_owner_blocks.is_empty() {
-            // We're deleting the old neighbourhood!
-            self.neighbourhoods.get_mut(&new_owner).unwrap().block = new_neighbourhood_block;
-            self.neighbourhoods.remove(&old_owner).unwrap();
-            self.block_to_neighbourhood.insert(id, new_owner);
-            // Tell the caller to recreate this SelectBoundary state, switching to the neighbourhood
-            // we just donated to, since the old is now gone
-            return Ok(Some(new_owner));
-        }
+        // Are each of the old neighbourhoods, minus any new blocks, still valid?
+        let mut return_value = None;
+        for old_owner in old_owners {
+            let mut old_owner_blocks = self.neighbourhood_to_blocks(old_owner);
+            for x in &add_all {
+                old_owner_blocks.remove(x);
+            }
+            if old_owner_blocks.is_empty() {
+                self.neighbourhoods.remove(&old_owner).unwrap();
+                return_value = Some(new_owner);
+                continue;
+            }
 
-        let mut old_neighbourhood_blocks =
-            self.make_merged_blocks(map, old_owner_blocks.clone())?;
-        // We might be splitting the old neighbourhood into multiple pieces! Pick the largest piece
-        // as the old_owner (so the UI for trimming a neighbourhood is less jarring), and create new
-        // neighbourhoods for the others.
-        old_neighbourhood_blocks.sort_by_key(|block| block.perimeter.interior.len());
-        self.neighbourhoods.get_mut(&old_owner).unwrap().block =
-            old_neighbourhood_blocks.pop().unwrap();
-        let new_splits = !old_neighbourhood_blocks.is_empty();
-        for split_piece in old_neighbourhood_blocks {
-            let new_neighbourhood = NeighbourhoodID(self.neighbourhood_id_counter);
-            self.neighbourhood_id_counter += 1;
-            self.neighbourhoods
-                .insert(new_neighbourhood, NeighbourhoodInfo::new(map, split_piece));
-        }
-        if new_splits {
-            // We need to update the owner of all single blocks in these new pieces
-            for id in old_owner_blocks {
-                self.block_to_neighbourhood
-                    .insert(id, self.neighbourhood_containing(id).unwrap());
+            let mut old_neighbourhood_blocks =
+                self.make_merged_blocks(map, old_owner_blocks.clone())?;
+            // We might be splitting the old neighbourhood into multiple pieces! Pick the largest piece
+            // as the old_owner (so the UI for trimming a neighbourhood is less jarring), and create new
+            // neighbourhoods for the others.
+            old_neighbourhood_blocks.sort_by_key(|block| block.perimeter.interior.len());
+            self.neighbourhoods.get_mut(&old_owner).unwrap().block =
+                old_neighbourhood_blocks.pop().unwrap();
+            let new_splits = !old_neighbourhood_blocks.is_empty();
+            for split_piece in old_neighbourhood_blocks {
+                let new_neighbourhood = NeighbourhoodID(self.neighbourhood_id_counter);
+                self.neighbourhood_id_counter += 1;
+                self.neighbourhoods
+                    .insert(new_neighbourhood, NeighbourhoodInfo::new(split_piece));
+            }
+            if new_splits {
+                // We need to update the owner of all single blocks in these new pieces
+                for id in old_owner_blocks {
+                    self.block_to_neighbourhood
+                        .insert(id, self.neighbourhood_containing(id).unwrap());
+                }
             }
         }
 
+        // Set up the newly expanded neighbourhood
         self.neighbourhoods.get_mut(&new_owner).unwrap().block = new_neighbourhood_block;
-        self.block_to_neighbourhood.insert(id, new_owner);
-        Ok(None)
+        for id in add_all {
+            self.block_to_neighbourhood.insert(id, new_owner);
+        }
+        Ok(return_value)
     }
 
     /// Needs to find an existing neighbourhood to take the block, or make a new one
@@ -292,7 +280,7 @@ impl Partitioning {
                 .iter()
                 .find(|(_, info)| info.block.perimeter.roads.contains(&other_side))
             {
-                return self.transfer_block(map, id, *new_owner);
+                return self.transfer_blocks(map, vec![id], *new_owner);
             }
         }
 
@@ -302,9 +290,9 @@ impl Partitioning {
         self.neighbourhood_id_counter += 1;
         self.neighbourhoods.insert(
             new_owner,
-            NeighbourhoodInfo::new(map, self.get_block(id).clone()),
+            NeighbourhoodInfo::new(self.get_block(id).clone()),
         );
-        let result = self.transfer_block(map, id, new_owner);
+        let result = self.transfer_blocks(map, vec![id], new_owner);
         if result.is_err() {
             // Revert the change above!
             self.neighbourhoods.remove(&new_owner).unwrap();
@@ -390,11 +378,11 @@ impl Partitioning {
         self.block_to_neighbourhood[&id]
     }
 
-    pub fn all_blocks_in_neighbourhood(&self, id: NeighbourhoodID) -> Vec<BlockID> {
-        let mut result = Vec::new();
+    pub fn neighbourhood_to_blocks(&self, id: NeighbourhoodID) -> BTreeSet<BlockID> {
+        let mut result = BTreeSet::new();
         for (block, n) in &self.block_to_neighbourhood {
             if *n == id {
-                result.push(*block);
+                result.insert(*block);
             }
         }
         result
@@ -435,7 +423,7 @@ impl Partitioning {
 
     // Possibly returns multiple merged blocks. The input is never "lost" -- if any perimeter fails
     // to become a block, fail the whole operation.
-    fn make_merged_blocks(&self, map: &Map, input: Vec<BlockID>) -> Result<Vec<Block>> {
+    fn make_merged_blocks(&self, map: &Map, input: BTreeSet<BlockID>) -> Result<Vec<Block>> {
         let mut perimeters = Vec::new();
         for id in input {
             perimeters.push(self.get_block(id).perimeter.clone());
@@ -461,6 +449,11 @@ impl Partitioning {
 
         let mut result = Vec::new();
         for id in adjacent_to_target_block.clone() {
+            // A block already part of new_owner never makes sense
+            if self.block_to_neighbourhood[&id] == new_owner {
+                continue;
+            }
+
             // TODO: intersect the two above -- aka, look for blocks adjacent both to target_block
             // and new_owner. But this seems too eager and maybe covered by the below condition.
             /*if self.block_to_neighbourhood(id) != new_owner && new_owner_frontier.contains(&id) {

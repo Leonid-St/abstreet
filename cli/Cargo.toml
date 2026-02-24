@@ -7,19 +7,20 @@ edition = "2021"
 abstio = { path = "../abstio" }
 abstutil = { path = "../abstutil" }
 anyhow = { workspace = true }
-csv = "1.1.4"
+convert_osm = { path = "../convert_osm" }
+csv = { workspace = true }
 fs-err = { workspace = true }
 geo = { workspace = true }
-geom = { path = "../geom" }
+geom = { workspace = true }
 importer = { path = "../importer" }
 log = { workspace = true }
 map_model = { path = "../map_model" }
-osmio = "0.7.0"
+osmio = "0.8.1"
 rand  = "0.8.3"
 rand_xorshift = { workspace = true }
 raw_map = { path = "../raw_map" }
-serde = { workspace = true }
+serde = { workspace = true, features=["derive"] }
 sim = { path = "../sim" }
 synthpop = { path = "../synthpop" }
 structopt = { workspace = true }
-tokio = { version = "1.19.2", features = ["full"] }
+tokio = { workspace = true }

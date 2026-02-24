@@ -26,9 +26,7 @@ impl Shortcuts {
         }
     }
 
-    pub fn new(app: &App, neighbourhood: &Neighbourhood, timer: &mut Timer) -> Self {
-        let map = &app.per_map.map;
-        let edits = &app.edits();
+    pub fn new(map: &Map, neighbourhood: &Neighbourhood, timer: &mut Timer) -> Self {
         // The overall approach: look for all possible paths from an entrance to an exit, only if they
         // connect to different major roads.
         //
@@ -60,8 +58,13 @@ impl Shortcuts {
             }
         }
 
-        let mut params = map.routing_params().clone();
-        edits.update_routing_params(&mut params);
+        // Short-circuit for performance. This happens for "degenerate" neighbourhoods without any
+        // internal roads, usually near the map edge, between dual carriageways, etc.
+        if requests.is_empty() {
+            return Self::empty();
+        }
+
+        let mut params = map.routing_params_respecting_modal_filters();
 
         // Restrict the pathfinding to the interior of the neighbourhood only. Don't allow using
         // perimeter roads or leaving and re-entering at all.
@@ -70,13 +73,7 @@ impl Shortcuts {
         // one filter. Note the original "demand model" input is bogus anyway; it's all possible
         // entrances and exits to the neighbourhood, without regards for the larger path somebody
         // actually wants to take.
-        params.avoid_roads.extend(
-            map.all_roads()
-                .iter()
-                .map(|r| r.id)
-                .collect::<BTreeSet<RoadID>>()
-                .difference(&neighbourhood.interior_roads),
-        );
+        params.only_use_roads = neighbourhood.interior_roads.clone();
 
         // Also can't use private roads
         for r in &neighbourhood.interior_roads {

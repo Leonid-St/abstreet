@@ -2,6 +2,7 @@
 //! covers the RawMap->Map stage.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::sync::{Arc, RwLock};
 
 use structopt::StructOpt;
 
@@ -48,12 +49,15 @@ impl Map {
         let mut map = Map {
             roads: Vec::new(),
             intersections: Vec::new(),
+            intersection_quad_tree: Arc::new(RwLock::new(None)),
             buildings: Vec::new(),
             transit_stops: BTreeMap::new(),
             transit_routes: Vec::new(),
             areas: Vec::new(),
             parking_lots: Vec::new(),
             zones: Vec::new(),
+            census_zones: raw.census_zones.clone(),
+            extra_pois: raw.extra_pois.clone(),
             boundary_polygon: raw.streets.boundary_polygon.clone(),
             stop_signs: BTreeMap::new(),
             traffic_signals: BTreeMap::new(),
@@ -104,6 +108,7 @@ impl Map {
                 incoming_lanes: Vec::new(),
                 outgoing_lanes: Vec::new(),
                 roads: i.roads.iter().map(|id| road_id_mapping[id]).collect(),
+                modal_filter: None,
                 merged: !raw.streets.intersections[&i.id]
                     .trim_roads_for_merging
                     .is_empty(),
@@ -185,8 +190,10 @@ impl Map {
                 crosswalk_forward: extra.crosswalk_forward,
                 crosswalk_backward: extra.crosswalk_backward,
                 transit_stops: BTreeSet::new(),
+                modal_filter: None,
                 barrier_nodes,
                 crossing_nodes,
+                crossings: Vec::new(),
             };
             road.speed_limit = road.speed_limit_from_osm();
             road.access_restrictions = road.access_restrictions_from_osm();
@@ -202,9 +209,15 @@ impl Map {
 
         for i in map.intersections.iter_mut() {
             if i.is_border() && i.roads.len() != 1 {
+                // i.orig_id may be synthetic and useless, so also print OSM links of the roads
+                let border_roads = i
+                    .roads
+                    .iter()
+                    .map(|r| map.roads[r.0].orig_id.osm_way_id.to_string())
+                    .collect::<Vec<_>>();
                 panic!(
                     "{} ({}) is a border, but is connected to >1 road: {:?}",
-                    i.id, i.orig_id, i.roads
+                    i.id, i.orig_id, border_roads
                 );
             }
             if i.control == IntersectionControl::Signalled {

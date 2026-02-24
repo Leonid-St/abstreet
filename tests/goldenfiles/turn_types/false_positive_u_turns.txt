@@ -1,0 +1,34 @@
+Turns:
+------
+TurnID(Lane #2, Lane #64, Intersection #0) is a Straight
+TurnID(Lane #2, Lane #160, Intersection #0) is a Straight
+TurnID(Lane #2, Lane #161, Intersection #0) is a Straight
+TurnID(Lane #3, Lane #64, Intersection #0) is a Straight
+TurnID(Lane #3, Lane #160, Intersection #0) is a Straight
+TurnID(Lane #3, Lane #161, Intersection #0) is a Straight
+TurnID(Lane #128, Lane #0, Intersection #0) is a Straight
+TurnID(Lane #128, Lane #1, Intersection #0) is a Straight
+TurnID(Lane #162, Lane #0, Intersection #0) is a Straight
+TurnID(Lane #162, Lane #1, Intersection #0) is a Straight
+TurnID(Lane #163, Lane #0, Intersection #0) is a Straight
+TurnID(Lane #163, Lane #1, Intersection #0) is a Straight
+TurnID(Lane #96, Lane #162, Intersection #2) is a Straight
+TurnID(Lane #96, Lane #163, Intersection #2) is a Straight
+TurnID(Lane #97, Lane #162, Intersection #2) is a Straight
+TurnID(Lane #97, Lane #163, Intersection #2) is a Straight
+TurnID(Lane #160, Lane #32, Intersection #2) is a Straight
+TurnID(Lane #160, Lane #33, Intersection #2) is a Straight
+TurnID(Lane #161, Lane #32, Intersection #2) is a Straight
+TurnID(Lane #161, Lane #33, Intersection #2) is a Straight
+
+------------
+Restrictions:
+------------
+Turn from Road #0 into Road #0, at intersection IntersectionID(0) is a BanTurns, type UTurn, location Pt2D(34.7446, 43.7276)
+Turn from Road #3 into Road #1, at intersection IntersectionID(2) is a BanTurns, type UTurn, location Pt2D(14.9735, -6.9585)
+Turn from Road #4 into Road #2, at intersection IntersectionID(0) is a BanTurns, type Right, location Pt2D(28.5963, 20.9867)
+Turn from Road #4 into Road #5, at intersection IntersectionID(0) is a BanTurns, type Right, location Pt2D(28.5963, 20.9867)
+Turn from Road #5 into Road #5, at intersection IntersectionID(0) is a BanTurns, type UTurn, location Pt2D(29.8495, 34.8782)
+Turn from Road #5 into Road #5, at intersection IntersectionID(0) is a BanTurns, type UTurn, location Pt2D(29.8495, 34.8782)
+Turn from Road #5 into Road #2, at intersection IntersectionID(0) is a BanTurns, type Right, location Pt2D(29.8495, 34.8782)
+

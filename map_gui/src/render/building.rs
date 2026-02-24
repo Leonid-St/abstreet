@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 
-use geom::{Angle, Distance, Line, Polygon, Pt2D, Ring, Tessellation};
+use geom::{Angle, Bounds, Distance, Line, Polygon, Pt2D, Ring, Tessellation};
 use map_model::{Building, BuildingID, Map, OffstreetParking};
 use widgetry::{Color, Drawable, EventCtx, GeomBatch, GfxCtx, Line, Text};
 
@@ -33,10 +33,12 @@ impl DrawBuilding {
         match &opts.camera_angle {
             CameraAngle::TopDown => {
                 bldg_batch.push(bldg_color, bldg.polygon.clone());
-                outlines_batch.push(
-                    cs.building_outline,
-                    bldg.polygon.to_outline(Distance::meters(0.1)),
-                );
+                if opts.show_building_outlines {
+                    outlines_batch.push(
+                        cs.building_outline,
+                        bldg.polygon.to_outline(Distance::meters(0.1)),
+                    );
+                }
 
                 let parking_icon = match bldg.parking {
                     OffstreetParking::PublicGarage(_, _) => true,
@@ -248,6 +250,10 @@ impl Renderable for DrawBuilding {
 
     fn get_outline(&self, map: &Map) -> Tessellation {
         map.get_b(self.id).polygon.to_outline(OUTLINE_THICKNESS)
+    }
+
+    fn get_bounds(&self, map: &Map) -> Bounds {
+        map.get_b(self.id).polygon.get_bounds()
     }
 
     fn contains_pt(&self, pt: Pt2D, map: &Map) -> bool {

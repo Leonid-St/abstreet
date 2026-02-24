@@ -7,13 +7,16 @@ use widgetry::Settings;
 #[macro_use]
 extern crate log;
 
+mod amenities_details;
 mod bus;
-mod find_amenities;
-mod find_home;
+mod common;
+mod from_amenity;
 mod isochrone;
-mod viewer;
+mod render;
+mod score_homes;
+mod single_start;
 
-type App = map_gui::SimpleApp<()>;
+type App = map_gui::SimpleApp<crate::isochrone::Options>;
 
 pub fn main() {
     let settings = Settings::new("15-minute neighborhoods");
@@ -28,14 +31,22 @@ fn run(mut settings: Settings) {
     settings = args
         .update_widgetry_settings(settings)
         .canvas_settings(options.canvas_settings.clone());
+
+    let session = crate::isochrone::Options {
+        movement: crate::isochrone::MovementOptions::Walking(
+            map_model::connectivity::WalkingOptions::default(),
+        ),
+        thresholds: crate::isochrone::Options::default_thresholds(),
+    };
+
     widgetry::run(settings, |ctx| {
         map_gui::SimpleApp::new(
             ctx,
             options,
             Some(args.map_name()),
             args.cam,
-            (),
-            |ctx, app| vec![viewer::Viewer::random_start(ctx, app)],
+            session,
+            |ctx, app| vec![single_start::SingleStart::random_start(ctx, app)],
         )
     });
 }

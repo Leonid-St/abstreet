@@ -1,7 +1,7 @@
 use geom::Duration;
 use map_gui::tools::FilePicker;
 use map_model::{
-    ControlStopSign, ControlTrafficSignal, EditCmd, EditIntersection, IntersectionID, StageType,
+    ControlStopSign, ControlTrafficSignal, EditIntersectionControl, IntersectionID, StageType,
 };
 use widgetry::tools::{ChooseSomething, PopupMsg};
 use widgetry::{
@@ -202,7 +202,7 @@ pub fn edit_entire_signal(
         .session
         .last_gmns_timing_csv
         .as_ref()
-        .map(|x| format!("import from GMNS {}", x));
+        .map(|(path, _)| format!("import from GMNS {}", path));
     let gmns_all = "import all traffic signals from a new GMNS timing.csv";
 
     let mut choices = vec![use_template.to_string()];
@@ -296,11 +296,14 @@ pub fn edit_entire_signal(
                 original.apply(app);
 
                 let mut edits = app.primary.map.get_edits().clone();
-                edits.commands.push(EditCmd::ChangeIntersection {
-                    i,
-                    old: app.primary.map.get_i_edit(i),
-                    new: EditIntersection::StopSign(ControlStopSign::new(&app.primary.map, i)),
-                });
+                edits
+                    .commands
+                    .push(app.primary.map.edit_intersection_cmd(i, |new| {
+                        new.control = EditIntersectionControl::StopSign(ControlStopSign::new(
+                            &app.primary.map,
+                            i,
+                        ));
+                    }));
                 apply_map_edits(ctx, app, edits);
                 Transition::Multi(vec![
                     Transition::Pop,
@@ -310,11 +313,9 @@ pub fn edit_entire_signal(
             x if x == close => {
                 original.apply(app);
 
-                let cmd = EditCmd::ChangeIntersection {
-                    i,
-                    old: app.primary.map.get_i_edit(i),
-                    new: EditIntersection::Closed,
-                };
+                let cmd = app.primary.map.edit_intersection_cmd(i, |new| {
+                    new.control = EditIntersectionControl::Closed;
+                });
                 if let Some(err) = check_sidewalk_connectivity(ctx, app, cmd.clone()) {
                     Transition::Replace(err)
                 } else {
@@ -341,11 +342,14 @@ pub fn edit_entire_signal(
             x if x == gmns_picker => Transition::Replace(FilePicker::new_state(
                 ctx,
                 None,
-                Box::new(move |ctx, app, maybe_path| {
-                    if let Ok(Some(path)) = maybe_path {
-                        app.session.last_gmns_timing_csv = Some(path.clone());
-                        match crate::edit::traffic_signals::gmns::import(&app.primary.map, i, &path)
-                        {
+                Box::new(move |ctx, app, maybe_file| {
+                    if let Ok(Some((path, bytes))) = maybe_file {
+                        app.session.last_gmns_timing_csv = Some((path.clone(), bytes.clone()));
+                        match crate::edit::traffic_signals::gmns::import(
+                            &app.primary.map,
+                            i,
+                            &bytes,
+                        ) {
                             Ok(new_signal) => Transition::Multi(vec![
                                 Transition::Pop,
                                 Transition::ModifyState(Box::new(move |state, ctx, app| {
@@ -371,7 +375,7 @@ pub fn edit_entire_signal(
                 match crate::edit::traffic_signals::gmns::import(
                     &app.primary.map,
                     i,
-                    app.session.last_gmns_timing_csv.as_ref().unwrap(),
+                    &app.session.last_gmns_timing_csv.as_ref().unwrap().1,
                 ) {
                     Ok(new_signal) => Transition::Multi(vec![
                         Transition::Pop,
@@ -392,8 +396,8 @@ pub fn edit_entire_signal(
             x if x == gmns_all => Transition::Replace(FilePicker::new_state(
                 ctx,
                 None,
-                Box::new(move |ctx, app, maybe_path| {
-                    if let Ok(Some(path)) = maybe_path {
+                Box::new(move |ctx, app, maybe_file| {
+                    if let Ok(Some((path, bytes))) = maybe_file {
                         // TODO This menu for a single intersection is a strange place to import for all
                         // intersections, but I'm not sure where else it should go. Also, this will
                         // blindly overwrite changes for all intersections and quit the current editor.
@@ -401,7 +405,7 @@ pub fn edit_entire_signal(
                             Transition::Pop,
                             Transition::Pop,
                             Transition::Push(crate::edit::traffic_signals::gmns::import_all(
-                                ctx, app, &path,
+                                ctx, app, &path, bytes,
                             )),
                         ])
                     } else {

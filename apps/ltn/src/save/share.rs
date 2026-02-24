@@ -20,7 +20,7 @@ pub struct ShareProposal {
 
 impl ShareProposal {
     pub fn new_state(ctx: &mut EventCtx, app: &App) -> Box<dyn State<App>> {
-        let checksum = match app.per_map.proposals.current_proposal.checksum(app) {
+        let checksum = match app.per_map.proposals.get_current().checksum(app) {
             Ok(checksum) => checksum,
             Err(err) => {
                 return PopupMsg::new_state(
@@ -51,7 +51,7 @@ impl ShareProposal {
                 String::new()
             };
             url = Some(format!(
-                "http://play.abstreet.org/{}/ltn.html?{}&--proposal=remote/{}{}",
+                "https://play.abstreet.org/{}/ltn.html?{}&--proposal=remote/{}{}",
                 map_gui::tools::version(),
                 map_path,
                 checksum,
@@ -125,7 +125,7 @@ impl SimpleState<App> for ShareProposal {
                 let proposal_contents = app
                     .per_map
                     .proposals
-                    .current_proposal
+                    .get_current()
                     .to_gzipped_bytes(app)
                     .unwrap();
                 return Transition::Replace(FutureLoader::<App, String>::new_state(

@@ -15,8 +15,9 @@ use abstio::{CityName, MapName};
 use abstutil::Timer;
 use map_model::RawToMapOptions;
 
-use self::configuration::{load_configuration, ImporterConfiguration};
+pub use self::configuration::ImporterConfiguration;
 pub use self::pick_geofabrik::pick_geofabrik;
+pub use utils::osmium;
 
 mod berlin;
 mod configuration;
@@ -44,19 +45,17 @@ pub async fn regenerate_everything(shard_num: usize, num_shards: usize) {
     }
 }
 
-/// Transforms a .osm file to a map in one step.
+/// Transforms a .osm.xml or .pbf file to a map in one step.
 pub async fn oneshot(
     osm_path: String,
     clip: Option<String>,
-    filter_crosswalks: bool,
+    options: convert_osm::Options,
     create_uk_travel_demand_model: bool,
     opts: RawToMapOptions,
 ) {
     let mut timer = abstutil::Timer::new("oneshot");
     println!("- Running convert_osm on {}", osm_path);
     let name = abstutil::basename(&osm_path);
-    let mut options = convert_osm::Options::default();
-    options.filter_crosswalks = filter_crosswalks;
     let raw = convert_osm::convert(
         osm_path,
         MapName::new("zz", "oneshot", &name),
@@ -73,7 +72,7 @@ pub async fn oneshot(
 
     if create_uk_travel_demand_model {
         timer.start("generating UK travel demand model");
-        uk::generate_scenario(&map, &load_configuration(), &mut timer)
+        uk::generate_scenario(&map, &ImporterConfiguration::load(), &mut timer)
             .await
             .unwrap();
         timer.stop("generating UK travel demand model");
@@ -172,7 +171,7 @@ impl Job {
             std::process::exit(1);
         }
 
-        let config: ImporterConfiguration = load_configuration();
+        let config = ImporterConfiguration::load();
 
         timer.start(format!("import {}", self.city.describe()));
         let names = if let Some(n) = self.only_map {

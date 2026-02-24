@@ -14,22 +14,21 @@ release_s3 = []
 abstio = { path = "../abstio" }
 abstutil = { path = "../abstutil" }
 anyhow = { workspace = true }
-built = { version = "0.5.2", optional = true, features=["chrono"] }
-chrono = "0.4.23"
+built = { version = "0.7.1", optional = true, features=["chrono"] }
+chrono = "0.4.31"
 colorous = { workspace = true }
 contour = { workspace = true }
-flate2 = "1.0.25"
-futures-channel = { version = "0.3.12"}
+flate2 = { workspace = true }
+futures-channel = { workspace = true }
 geojson = { workspace = true }
-geom = { path = "../geom" }
+geom = { workspace = true }
 instant = { workspace = true }
-lazy_static = "1.4.0"
 log = { workspace = true }
 lyon = "1.0.1"
 map_model = { path = "../map_model" }
-regex = "1.7.1"
-rfd = "0.11.0"
-serde = { workspace = true }
+regex = "1.10.2"
+rfd = "0.11.3"
+serde = { workspace = true, features=["derive"] }
 synthpop = { path = "../synthpop" }
 structopt = { workspace = true }
 subprocess = { git = "https://github.com/hniksic/rust-subprocess", optional = true }
@@ -39,4 +38,4 @@ widgetry = { path = "../widgetry" }
 fs-err = { workspace = true }
 
 [build-dependencies]
-built = "0.5.0"
+built = { version = "0.7.1", features=["chrono"] }

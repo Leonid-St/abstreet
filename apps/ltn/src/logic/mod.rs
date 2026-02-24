@@ -1,14 +1,13 @@
 mod auto_filters;
-pub mod crossings;
-mod existing_filters;
+mod existing;
 pub mod impact;
-pub mod map_edits;
 mod partition;
 mod shortcuts;
+pub mod turn_restrictions;
 
 pub use auto_filters::AutoFilterHeuristic;
-pub use crossings::populate_existing_crossings;
-pub use existing_filters::transform_existing_filters;
+pub use existing::transform_existing;
 pub use impact::Impact;
 pub use partition::{BlockID, CustomBoundary, NeighbourhoodID, Partitioning};
 pub use shortcuts::Shortcuts;
+pub use turn_restrictions::possible_destination_roads;

@@ -1,5 +1,6 @@
 use geom::{Angle, ArrowCap, Distance, PolyLine, Pt2D};
 use map_gui::tools::DrawSimpleRoadLabels;
+use map_model::FilterType;
 use osm2streets::Direction;
 use widgetry::mapspace::{DummyID, World};
 use widgetry::tools::{ChooseSomething, PopupMsg};
@@ -12,9 +13,7 @@ use super::{EditMode, EditNeighbourhood, EditOutcome};
 use crate::components::{AppwidePanel, BottomPanel, Mode};
 use crate::logic::AutoFilterHeuristic;
 use crate::render::colors;
-use crate::{
-    is_private, pages, render, App, FilterType, Neighbourhood, NeighbourhoodID, Transition,
-};
+use crate::{is_private, pages, render, App, Neighbourhood, NeighbourhoodID, Transition};
 
 pub struct DesignLTN {
     appwide_panel: AppwidePanel,
@@ -49,7 +48,7 @@ impl DesignLTN {
         let labels = DrawSimpleRoadLabels::new(
             ctx,
             app,
-            colors::ROAD_LABEL,
+            colors::LOCAL_ROAD_LABEL,
             Box::new(move |r| label_roads.contains(&r.id)),
         );
 
@@ -70,7 +69,7 @@ impl DesignLTN {
             highlight_cell: World::new(),
             edit: EditNeighbourhood::temporary(),
             preserve_state: crate::save::PreserveState::DesignLTN(
-                app.partitioning().all_blocks_in_neighbourhood(id),
+                app.partitioning().neighbourhood_to_blocks(id),
             ),
 
             show_unreachable_cell: Drawable::empty(ctx),
@@ -187,17 +186,8 @@ impl State<App> for DesignLTN {
                         "Unusual perimeter",
                         vec![
                         "Part of this area's perimeter consists of streets classified as local.",
-                        "This software assumes perimeter roads are intended to carry through-traffic, and the cells and shortcuts calculated reflect this.",
-                        "(This is why you can't place filters on perimeter roads.)",
-                        "You usually want major roads to surround all sides of your neighbourhood.",
-                        "",
-                        "There are a few ways to fix this:",
-                        "",
-                        "- If the area is near the edge of the map, try importing a larger area, including the next major road in that direction",
-                        "- Use the 'Adjust boundary' tool",
-                        "",
-                        "Some boundaries can't be properly drawn due to bugs in the software.",
-                        "Contact dabreegster@gmail.com or file an issue on Github for help.",
+                        "This is usually fine, when this area doesn't connect to other main roads farther away.",
+                        "If you're near the edge of the map, it might be an error. Try importing a larger area, including the next major road in that direction",
                         ],
                         ));
             }
@@ -214,6 +204,14 @@ impl State<App> for DesignLTN {
                     self.update(ctx, app);
                     return Transition::Keep;
                 }
+                EditOutcome::UpdateAll => {
+                    if app.session.manage_proposals {
+                        self.appwide_panel = AppwidePanel::new(ctx, app, Mode::ModifyNeighbourhood);
+                    }
+                    self.neighbourhood.edits_changed(&app.per_map.map);
+                    self.update(ctx, app);
+                    return Transition::Keep;
+                }
                 EditOutcome::Transition(t) => {
                     return t;
                 }
@@ -223,6 +221,13 @@ impl State<App> for DesignLTN {
         match self.edit.event(ctx, app, &self.neighbourhood) {
             EditOutcome::Nothing => {}
             EditOutcome::UpdatePanelAndWorld => {
+                self.update(ctx, app);
+            }
+            EditOutcome::UpdateAll => {
+                if app.session.manage_proposals {
+                    self.appwide_panel = AppwidePanel::new(ctx, app, Mode::ModifyNeighbourhood);
+                }
+                self.neighbourhood.edits_changed(&app.per_map.map);
                 self.update(ctx, app);
             }
             EditOutcome::Transition(t) => {
@@ -248,8 +253,9 @@ impl State<App> for DesignLTN {
 
         self.appwide_panel.draw(g);
         self.bottom_panel.draw(g);
-        app.session.layers.draw(g, app);
         self.labels.draw(g);
+        app.per_map.draw_major_road_labels.draw(g);
+        app.session.layers.draw(g, app);
         app.per_map.draw_all_filters.draw(g);
         app.per_map.draw_poi_icons.draw(g);
 
@@ -317,6 +323,7 @@ fn setup_editing(
             .draw_hovered(batch)
             .build(ctx);
     }
+    highlight_cell.initialize_hover(ctx);
 
     if !matches!(
         app.session.edit_mode,
@@ -370,7 +377,7 @@ fn setup_editing(
                 .maybe_reverse(dir == Direction::Back);
 
                 draw_top_layer.push(
-                    colors::ROAD_LABEL,
+                    colors::LOCAL_ROAD_LABEL,
                     pl.make_arrow(thickness, ArrowCap::Triangle)
                         .to_outline(thickness / 4.0),
                 );
@@ -489,12 +496,16 @@ fn make_bottom_panel(
     appwide_panel: &AppwidePanel,
     per_tab_contents: Widget,
 ) -> Panel {
+    let (road_filters, diagonal_filters, one_ways, turn_restrictions) = count_edits(app);
+
     let row = Widget::row(vec![
         edit_mode(ctx, app),
         if let EditMode::Shortcuts(ref focus) = app.session.edit_mode {
             super::shortcuts::widget(ctx, app, focus.as_ref())
         } else if let EditMode::SpeedLimits = app.session.edit_mode {
             super::speed_limits::widget(ctx)
+        } else if let EditMode::TurnRestrictions(ref focus) = app.session.edit_mode {
+            super::turn_restrictions::widget(ctx, app, focus.as_ref())
         } else {
             Widget::nothing()
         }
@@ -504,17 +515,14 @@ fn make_bottom_panel(
             ctx.style()
                 .btn_plain
                 .icon("system/assets/tools/undo.svg")
-                .disabled(app.edits().previous_version.is_none())
+                // TODO Basemap edits count in here
+                .disabled(app.per_map.map.get_edits().commands.is_empty())
                 .hotkey(lctrl(Key::Z))
                 .build_widget(ctx, "undo"),
             Widget::col(vec![
-                // TODO Only count new filters, not existing
-                format!(
-                    "{} filters",
-                    app.edits().roads.len() + app.edits().intersections.len()
-                )
-                .text_widget(ctx),
-                format!("{} road directions changed", app.edits().one_ways.len()).text_widget(ctx),
+                format!("{} new filters", road_filters + diagonal_filters).text_widget(ctx),
+                format!("{} turn restrictions changed", turn_restrictions).text_widget(ctx),
+                format!("{} road directions changed", one_ways).text_widget(ctx),
             ]),
         ]),
         Widget::vertical_separator(ctx),
@@ -550,9 +558,49 @@ fn make_bottom_panel(
     BottomPanel::new(ctx, appwide_panel, row)
 }
 
+fn count_edits(app: &App) -> (usize, usize, usize, usize) {
+    let map = &app.per_map.map;
+    let mut road_filters = 0;
+    let mut diagonal_filters = 0;
+    let mut one_ways = 0;
+    let mut turn_restrictions = 0;
+
+    for (r, orig) in &map.get_edits().original_roads {
+        let road = map.get_r(*r);
+        // Don't count existing filters that were modified?
+        if road.modal_filter.is_some() && orig.modal_filter.is_none() {
+            road_filters += 1;
+        }
+        let dir_new = road.lanes.iter().map(|l| l.dir).collect::<Vec<_>>();
+        let dir_old = orig.lanes_ltr.iter().map(|l| l.dir).collect::<Vec<_>>();
+        // TODO This incorrectly includes some existing filters on cycleways
+        if dir_new != dir_old {
+            one_ways += 1;
+        }
+        // Counts both new adding new turn restrictions and removing pre-existing turn restrictions
+        let mut tr_added = road.turn_restrictions.clone();
+        tr_added.retain(|x| !orig.turn_restrictions.contains(x));
+        let mut tr_removed = orig.turn_restrictions.clone();
+        tr_removed.retain(|x| !road.turn_restrictions.contains(x));
+        let mut ctr_added = road.complicated_turn_restrictions.clone();
+        ctr_added.retain(|x| !orig.complicated_turn_restrictions.contains(x));
+        let mut ctr_removed = orig.complicated_turn_restrictions.clone();
+        ctr_removed.retain(|x| !road.complicated_turn_restrictions.contains(x));
+        turn_restrictions +=
+            tr_added.len() + tr_removed.len() + ctr_added.len() + ctr_removed.len();
+    }
+    for (i, orig) in &map.get_edits().original_intersections {
+        if map.get_i(*i).modal_filter.is_some() && orig.modal_filter.is_none() {
+            diagonal_filters += 1;
+        }
+    }
+
+    (road_filters, diagonal_filters, one_ways, turn_restrictions)
+}
+
 fn edit_mode(ctx: &mut EventCtx, app: &App) -> Widget {
     let edit_mode = &app.session.edit_mode;
-    let hide_color = app.session.filter_type.hide_color();
+    let hide_color = render::filter_hide_color(app.session.filter_type);
     let name = match app.session.filter_type {
         FilterType::WalkCycleOnly => "Modal filter -- walking/cycling only",
         FilterType::NoEntry => "Modal filter - no entry",
@@ -564,7 +612,7 @@ fn edit_mode(ctx: &mut EventCtx, app: &App) -> Widget {
         Widget::custom_row(vec![
             ctx.style()
                 .btn_solid_primary
-                .icon(app.session.filter_type.svg_path())
+                .icon(render::filter_svg_path(app.session.filter_type))
                 .image_color(
                     RewriteColor::Change(hide_color, Color::CLEAR),
                     ControlState::Default,
@@ -654,13 +702,30 @@ fn edit_mode(ctx: &mut EventCtx, app: &App) -> Widget {
             .hotkey(Key::F5)
             .tooltip_and_disabled({
                 let mut txt = Text::new();
-                txt.add_line(Line(Key::F4.describe()).fg(ctx.style().text_hotkey_color));
+                txt.add_line(Line(Key::F5.describe()).fg(ctx.style().text_hotkey_color));
                 txt.append(Line(" - Speed limits"));
                 txt.add_line(Line("Click").fg(ctx.style().text_hotkey_color));
                 txt.append(Line(" a road to convert it to 20mph (32kph)"));
                 txt
             })
             .build_widget(ctx, "Speed limits")
+            .centered_vert(),
+        ctx.style()
+            .btn_solid_primary
+            .icon("system/assets/map/no_right_turn_button.svg")
+            .disabled(matches!(edit_mode, EditMode::TurnRestrictions(_)))
+            .hotkey(Key::F6)
+            .tooltip_and_disabled({
+                let mut txt = Text::new();
+                txt.add_line(Line(Key::F6.describe()).fg(ctx.style().text_hotkey_color));
+                txt.append(Line(" - Turn restrictions"));
+                txt.add_line(Line("Click").fg(ctx.style().text_hotkey_color));
+                txt.append(Line(
+                    " a road to edit turn restrictions at its intersections",
+                ));
+                txt
+            })
+            .build_widget(ctx, "Turn restrictions")
             .centered_vert(),
     ])
 }

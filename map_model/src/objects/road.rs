@@ -10,7 +10,8 @@ use geom::{Distance, PolyLine, Polygon, Speed};
 
 use crate::{
     osm, AccessRestrictions, CommonEndpoint, CrossingType, Direction, DrivingSide, IntersectionID,
-    Lane, LaneID, LaneSpec, LaneType, Map, PathConstraints, RestrictionType, TransitStopID, Zone,
+    Lane, LaneID, LaneSpec, LaneType, Map, PathConstraints, RestrictionType, RoadFilter,
+    TransitStopID, Zone,
 };
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -102,7 +103,12 @@ impl DirectedRoadID {
             }
         }
         if found.len() != 1 {
-            panic!("must_get_sidewalk broken by {}", self);
+            panic!(
+                "must_get_sidewalk broken by {} ({}). Found lanes {:?}",
+                self,
+                map.get_r(self.road).orig_id,
+                found
+            );
         }
         found[0]
     }
@@ -191,14 +197,20 @@ pub struct Road {
     /// Meaningless order
     pub transit_stops: BTreeSet<TransitStopID>,
 
+    /// There's either a modal filter on this road or not
+    pub modal_filter: Option<RoadFilter>,
+
     /// Some kind of modal filter or barrier this distance along center_pts.
     pub barrier_nodes: Vec<Distance>,
     /// Some kind of crossing this distance along center_pts.
+    // TODO Just use Crossing directly?
     pub crossing_nodes: Vec<(Distance, CrossingType)>,
+    /// Sorted by increasing distance
+    pub crossings: Vec<Crossing>,
 }
 
 impl Road {
-    pub(crate) fn lane_specs(&self) -> Vec<LaneSpec> {
+    pub fn lane_specs(&self) -> Vec<LaneSpec> {
         self.lanes
             .iter()
             .map(|l| LaneSpec {
@@ -720,4 +732,10 @@ impl OriginalRoad {
             i2: osm::NodeID(i2),
         }
     }
+}
+
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+pub struct Crossing {
+    pub kind: CrossingType,
+    pub dist: Distance,
 }

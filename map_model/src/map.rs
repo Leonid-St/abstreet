@@ -1,23 +1,30 @@
 //! A bunch of (mostly read-only) queries on a Map.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use std::{
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
+    sync::{Arc, RwLock},
+};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use petgraph::graphmap::{DiGraphMap, UnGraphMap};
+use popgetter::CensusZone;
 
 use abstio::{CityName, MapName};
 use abstutil::{prettyprint_usize, serialized_size_bytes, MultiMap, Tags, Timer};
-use geom::{Bounds, Distance, Duration, GPSBounds, LonLat, PolyLine, Polygon, Pt2D, Ring, Time};
+use geom::{
+    Angle, Bounds, Distance, Duration, FindClosest, GPSBounds, LonLat, PolyLine, Polygon, Pt2D,
+    Ring, Time,
+};
 use raw_map::{RawBuilding, RawMap};
 
 use crate::{
-    osm, Area, AreaID, AreaType, Building, BuildingID, BuildingType, CommonEndpoint,
+    osm, AmenityType, Area, AreaID, AreaType, Building, BuildingID, BuildingType, CommonEndpoint,
     CompressedMovementID, ControlStopSign, ControlTrafficSignal, DirectedRoadID, Direction,
-    DrivingSide, Intersection, IntersectionControl, IntersectionID, IntersectionKind, Lane, LaneID,
-    LaneType, Map, MapConfig, MapEdits, Movement, MovementID, OffstreetParking, OriginalRoad,
-    ParkingLot, ParkingLotID, Path, PathConstraints, PathRequest, PathV2, Pathfinder,
-    PathfinderCaching, Position, Road, RoadID, RoutingParams, TransitRoute, TransitRouteID,
-    TransitStop, TransitStopID, Turn, TurnID, TurnType, Zone,
+    DrivingSide, ExtraPOI, Intersection, IntersectionControl, IntersectionID, IntersectionKind,
+    Lane, LaneID, LaneType, Map, MapConfig, MapEdits, Movement, MovementID, OffstreetParking,
+    OriginalRoad, ParkingLot, ParkingLotID, Path, PathConstraints, PathRequest, PathV2, Pathfinder,
+    PathfinderCaching, Position, Road, RoadFilter, RoadID, RoutingParams, TransitRoute,
+    TransitRouteID, TransitStop, TransitStopID, Turn, TurnID, TurnType, Zone,
 };
 
 impl Map {
@@ -104,6 +111,16 @@ impl Map {
                     self.zones.len(),
                     serialized_size_bytes(&self.zones),
                 ),
+                (
+                    "census_zones",
+                    self.census_zones.len(),
+                    serialized_size_bytes(&self.census_zones),
+                ),
+                (
+                    "extra_pois",
+                    self.extra_pois.len(),
+                    serialized_size_bytes(&self.extra_pois),
+                ),
                 ("pathfinder", 1, serialized_size_bytes(&self.pathfinder)),
             ];
             costs.sort_by_key(|(_, _, bytes)| *bytes);
@@ -129,12 +146,15 @@ impl Map {
         Map {
             roads: Vec::new(),
             intersections: Vec::new(),
+            intersection_quad_tree: Arc::new(RwLock::new(None)),
             buildings: Vec::new(),
             transit_stops: BTreeMap::new(),
             transit_routes: Vec::new(),
             areas: Vec::new(),
             parking_lots: Vec::new(),
             zones: Vec::new(),
+            census_zones: Vec::new(),
+            extra_pois: Vec::new(),
             boundary_polygon: Ring::must_new(vec![
                 Pt2D::new(0.0, 0.0),
                 Pt2D::new(1.0, 0.0),
@@ -229,6 +249,16 @@ impl Map {
         &self.roads
     }
 
+    pub fn all_roads_with_modal_filter(&self) -> impl Iterator<Item = (&Road, &RoadFilter)> {
+        self.roads.iter().filter_map(|r| {
+            if let Some(ref filter) = r.modal_filter {
+                Some((r, filter))
+            } else {
+                None
+            }
+        })
+    }
+
     pub fn all_lanes(&self) -> impl Iterator<Item = &Lane> {
         self.roads.iter().flat_map(|r| r.lanes.iter())
     }
@@ -255,6 +285,14 @@ impl Map {
 
     pub fn all_zones(&self) -> &Vec<Zone> {
         &self.zones
+    }
+
+    pub fn all_census_zones(&self) -> &Vec<(Polygon, CensusZone)> {
+        &self.census_zones
+    }
+
+    pub fn all_extra_pois(&self) -> &Vec<ExtraPOI> {
+        &self.extra_pois
     }
 
     pub fn maybe_get_r(&self, id: RoadID) -> Option<&Road> {
@@ -702,6 +740,41 @@ impl Map {
         bail!("Can't find {}", id)
     }
 
+    fn populate_intersection_quad_tree(&self) {
+        let quad_tree_lock = Arc::clone(&self.intersection_quad_tree);
+        let mut quad_tree = quad_tree_lock.write().unwrap();
+
+        if quad_tree.is_some() {
+            return;
+        }
+
+        let mut quad: FindClosest<IntersectionID> = FindClosest::new();
+
+        for intersection in self.all_intersections() {
+            quad.add_polygon(intersection.id, &intersection.polygon);
+        }
+        *quad_tree = Some(quad);
+    }
+
+    pub fn localise_lon_lat_to_map(&self, point: LonLat) -> Pt2D {
+        point.to_pt(&self.gps_bounds)
+    }
+
+    pub fn find_i_by_pt2d(&self, pnt: Pt2D) -> Result<IntersectionID> {
+        self.populate_intersection_quad_tree();
+        let quad_tree_lock = Arc::clone(&self.intersection_quad_tree);
+        let quad_tree = quad_tree_lock.read().unwrap();
+
+        if let Some(tree) = &*quad_tree {
+            let (intersection_id, _) = tree
+                .closest_pt(pnt, Distance::meters(100.0))
+                .context("Failed to find intersection within 100m of specified point")?;
+            Ok(intersection_id)
+        } else {
+            unreachable!("Intersection Quad tree was somehow blank even after generation")
+        }
+    }
+
     pub fn find_b_by_osm_id(&self, id: osm::OsmID) -> Option<BuildingID> {
         for b in self.all_buildings() {
             if b.orig_id == id {
@@ -864,6 +937,26 @@ impl Map {
         &self.routing_params
     }
 
+    /// Adjusts the routing params baked into the map by accounting for any modal filters created
+    /// since.
+    /// TODO It's weird that these don't already take effect!
+    pub fn routing_params_respecting_modal_filters(&self) -> RoutingParams {
+        let mut params = self.routing_params.clone();
+        for r in &self.roads {
+            if r.modal_filter.is_some() {
+                params.avoid_roads.insert(r.id);
+            }
+        }
+        for i in &self.intersections {
+            if let Some(ref filter) = i.modal_filter {
+                params
+                    .avoid_movements_between
+                    .extend(filter.avoid_movements_between_roads());
+            }
+        }
+        params
+    }
+
     pub fn road_to_buildings(&self, r: RoadID) -> &BTreeSet<BuildingID> {
         self.road_to_buildings.get(r)
     }
@@ -999,4 +1092,165 @@ impl Map {
         let way = self.get_r(r).orig_id.osm_way_id;
         self.bus_routes_on_roads.get(way)
     }
+
+    /// Find all amenity types that at least 1 building contains
+    pub fn get_available_amenity_types(&self) -> BTreeSet<AmenityType> {
+        let mut result = BTreeSet::new();
+        for b in self.all_buildings() {
+            for amenity in &b.amenities {
+                if let Some(t) = AmenityType::categorize(&amenity.amenity_type) {
+                    result.insert(t);
+                }
+            }
+        }
+        result
+    }
+
+    // TODO This returns a mixture of different things related to the turn. It might be better
+    // to create and return a `Turn`.
+    pub fn get_ban_turn_info(
+        &self,
+        r1: &Road,
+        r2: &Road,
+        icon_counter: &HashMap<IntersectionID, i32>,
+    ) -> (TurnType, Pt2D, Angle, IntersectionID) {
+        // Determine where to place the symbol
+        let i = match r1.common_endpoint(r2) {
+            CommonEndpoint::One(i) => i,
+            // This is probably rare, just pick one side arbitrarily
+            CommonEndpoint::Both => r1.src_i,
+            CommonEndpoint::None => {
+                // This may be that `r1` and `r2` are joined by a complicated_turn_restrictions,
+                // but don't have a CommonEndpoint.
+                // In this case the end of r1 appears to be the most appropriate location to pick here
+                r1.dst_i
+            }
+        };
+
+        // Determine where to place and orientate the icon
+        let sign_count = *icon_counter.get(&i).unwrap_or(&1);
+        let mut ideal_dist_from_intersection = sign_count as f64 * 1.1 * r1.get_width();
+        if 2.0 * ideal_dist_from_intersection > r1.center_pts.length() {
+            // We've run out of space on the road to fit all of the icons on. We will just pile them up where we can
+            // Next try near the end of the stack, but just still in the appropriate half of the road
+            ideal_dist_from_intersection = 0.5 * (r1.center_pts.length() - r1.get_width());
+            if ideal_dist_from_intersection < Distance::ZERO {
+                // The road is wider than it is long, so just squeeze them in:
+                ideal_dist_from_intersection = 0.3 * r1.center_pts.length();
+            }
+        }
+
+        // Adjust according to which end of the road we've measuring from
+        let dist_from_intersection = if r1.src_i == i {
+            ideal_dist_from_intersection
+        } else {
+            r1.center_pts.length() - ideal_dist_from_intersection
+        };
+
+        let (sign_pt, mut r1_angle) = r1.center_pts.must_dist_along(dist_from_intersection);
+
+        // Correct the angle, based on whether the vector direction is towards or away from the intersection
+        // TODO what is the standard way of describing the vector direction (rather than the traffic direction) for roads?
+        r1_angle = if r1.src_i == i {
+            r1_angle.rotate_degs(180.0)
+        } else {
+            r1_angle
+        };
+
+        let (_, mut r2_angle) = r2
+            .center_pts
+            .must_dist_along((if r2.src_i == i { 0.2 } else { 0.8 }) * r2.center_pts.length());
+
+        // Correct the angle, based on whether the vector direction is towards or away from the intersection
+        r2_angle = if r2.dst_i == i {
+            r2_angle.rotate_degs(180.0)
+        } else {
+            r2_angle
+        };
+
+        let t_type = turn_type_from_road_geom(r1, r1_angle, r2, r2_angle, self.get_i(i), self);
+        (t_type, sign_pt, r1_angle, i)
+    }
+}
+
+pub fn turn_type_from_road_geom(
+    r1: &Road,
+    r1_angle: Angle,
+    r2: &Road,
+    r2_angle: Angle,
+    i: &Intersection,
+    map: &Map,
+) -> TurnType {
+    let expected_turn_types = expected_turn_types_for_four_way(i, map);
+
+    let mut turn_type = turn_type_from_angles(r1_angle, r2_angle);
+    if turn_type == TurnType::UTurn {
+        // Lots of false positives when classifying these just based on angles. So also
+        // require the road names to match.
+
+        if r1.get_name(None) != r2.get_name(None) {
+            // Distinguish really sharp lefts/rights based on clockwiseness
+            if r1_angle.simple_shortest_rotation_towards(r2_angle) < 0.0 {
+                turn_type = TurnType::Right;
+            } else {
+                turn_type = TurnType::Left;
+            }
+        }
+    } else if let Some(expected_type) = expected_turn_types
+        .as_ref()
+        .and_then(|e| e.get(&(r1.id, r2.id)))
+    {
+        // At some 4-way intersections, roads meet at strange angles, throwing off
+        // turn_type_from_angles. Correct it based on relative ordering.
+        if turn_type != *expected_type {
+            warn!(
+                "Turn from {} to {} looks like {:?} by angle, but is {:?} by ordering",
+                r1.orig_id, r2.orig_id, turn_type, expected_type
+            );
+            turn_type = *expected_type;
+        }
+    }
+    turn_type
+}
+
+pub fn turn_type_from_angles(from: Angle, to: Angle) -> TurnType {
+    let diff = from.simple_shortest_rotation_towards(to);
+    // This is a pretty arbitrary parameter, but a difference of 30 degrees seems reasonable for
+    // some observed cases.
+    if diff.abs() < 30.0 {
+        TurnType::Straight
+    } else if diff.abs() > 135.0 {
+        TurnType::UTurn
+    } else if diff < 0.0 {
+        // Clockwise rotation
+        TurnType::Right
+    } else {
+        // Counter-clockwise rotation
+        TurnType::Left
+    }
+}
+
+fn expected_turn_types_for_four_way(
+    i: &Intersection,
+    map: &Map,
+) -> Option<HashMap<(RoadID, RoadID), TurnType>> {
+    let roads = i.get_sorted_incoming_roads(map);
+    if roads.len() != 4 {
+        return None;
+    }
+
+    // Just based on relative ordering around the intersection, turns (from road, to road, should
+    // have this type)
+    let mut expected_turn_types: HashMap<(RoadID, RoadID), TurnType> = HashMap::new();
+    for (offset, turn_type) in [
+        (1, TurnType::Left),
+        (2, TurnType::Straight),
+        (3, TurnType::Right),
+    ] {
+        for from_idx in 0..roads.len() {
+            let to = *abstutil::wraparound_get(&roads, (from_idx as isize) + offset);
+            expected_turn_types.insert((roads[from_idx], to), turn_type);
+        }
+    }
+    Some(expected_turn_types)
 }

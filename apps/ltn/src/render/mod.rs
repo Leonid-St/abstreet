@@ -1,55 +1,16 @@
 mod cells;
 pub mod colors;
+mod filters;
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 
-use geom::Distance;
-use map_model::osm::RoadRank;
-use map_model::{AmenityType, Map, RoadID};
+use geom::{Angle, Distance, Pt2D};
+use map_model::{AmenityType, ExtraPOIType, FilterType, Map, RestrictionType, Road, TurnType};
 use widgetry::mapspace::DrawCustomUnzoomedShapes;
-use widgetry::{Color, Drawable, EventCtx, GeomBatch, GfxCtx, RewriteColor};
-
-use crate::App;
+use widgetry::{Color, Drawable, EventCtx, GeomBatch, GfxCtx, Line, RewriteColor, Text};
 
 pub use cells::RenderCells;
-
-pub fn draw_main_roads(ctx: &EventCtx, app: &App) -> Drawable {
-    let mut roads = HashSet::new();
-    for r in app.per_map.map.all_roads() {
-        if r.get_rank() != RoadRank::Local {
-            roads.insert(r.id);
-        }
-    }
-    draw_roads(ctx, app, roads)
-}
-
-pub fn draw_boundary_roads(ctx: &EventCtx, app: &App) -> Drawable {
-    let mut roads = HashSet::new();
-    for info in app.partitioning().all_neighbourhoods().values() {
-        for id in &info.block.perimeter.roads {
-            roads.insert(id.road);
-        }
-    }
-    draw_roads(ctx, app, roads)
-}
-
-fn draw_roads(ctx: &EventCtx, app: &App, roads: HashSet<RoadID>) -> Drawable {
-    let mut batch = GeomBatch::new();
-    let mut intersections = HashSet::new();
-    for r in roads {
-        let road = app.per_map.map.get_r(r);
-        batch.push(colors::HIGHLIGHT_BOUNDARY, road.get_thick_polygon());
-        intersections.insert(road.src_i);
-        intersections.insert(road.dst_i);
-    }
-    for i in intersections {
-        batch.push(
-            colors::HIGHLIGHT_BOUNDARY,
-            app.per_map.map.get_i(i).polygon.clone(),
-        );
-    }
-    batch.build(ctx)
-}
+pub use filters::render_modal_filters;
 
 pub fn render_poi_icons(ctx: &EventCtx, map: &Map) -> Drawable {
     let mut batch = GeomBatch::new();
@@ -64,6 +25,27 @@ pub fn render_poi_icons(ctx: &EventCtx, map: &Map) -> Drawable {
         }) {
             batch.append(school.clone().centered_on(b.polygon.polylabel()));
         }
+    }
+
+    let tfl =
+        GeomBatch::load_svg(ctx, "system/assets/map/tfl_underground.svg").scale_to_fit_width(20.0);
+    let national_rail =
+        GeomBatch::load_svg(ctx, "system/assets/map/national_rail.svg").scale_to_fit_width(20.0);
+
+    // TODO Toggle3Zoomed could be nicer; these're not terribly visible from afar
+    for extra in map.all_extra_pois() {
+        let (name, icon) = match extra.kind {
+            ExtraPOIType::LondonUndergroundStation(ref name) => (name, &tfl),
+            ExtraPOIType::NationalRailStation(ref name) => (name, &national_rail),
+        };
+        batch.append(icon.clone().centered_on(extra.pt));
+        batch.append(
+            Text::from(Line(name).fg(Color::WHITE))
+                .bg(Color::hex("#0019A8"))
+                .render_autocropped(ctx)
+                .scale_to_fit_height(10.0)
+                .centered_on(extra.pt.offset(0.0, icon.get_bounds().height())),
+        );
     }
 
     ctx.upload(batch)
@@ -97,6 +79,77 @@ pub fn render_bus_routes(ctx: &EventCtx, map: &Map) -> Drawable {
     ctx.upload(batch)
 }
 
+pub fn render_turn_restrictions(ctx: &EventCtx, map: &Map) -> Drawable {
+    let mut batch = GeomBatch::new();
+    for r1 in map.all_roads() {
+        // TODO Also interpret lane-level? Maybe just check all the generated turns and see what's
+        // allowed / banned in practice?
+
+        // Count the number of turn restrictions at each end of the road
+        let mut icon_counter = HashMap::from([(r1.dst_i, 1), (r1.src_i, 1)]);
+
+        for (restriction, r2) in &r1.turn_restrictions {
+            // TODO "Invert" OnlyAllowTurns so we can just draw banned things
+            if *restriction == RestrictionType::BanTurns {
+                let (t_type, sign_pt, r1_angle, i) =
+                    map.get_ban_turn_info(r1, map.get_r(*r2), &icon_counter);
+                // add to the counter
+                icon_counter.entry(i).and_modify(|n| *n += 1);
+                batch.append(draw_turn_restriction_icon(
+                    ctx, t_type, sign_pt, r1, r1_angle,
+                ));
+            }
+        }
+        for (_via, r2) in &r1.complicated_turn_restrictions {
+            // TODO Show the 'via'? Or just draw the entire shape?
+            let (t_type, sign_pt, r1_angle, i) =
+                map.get_ban_turn_info(r1, map.get_r(*r2), &icon_counter);
+            icon_counter.entry(i).and_modify(|n| *n += 1);
+            batch.append(draw_turn_restriction_icon(
+                ctx, t_type, sign_pt, r1, r1_angle,
+            ));
+        }
+    }
+    ctx.upload(batch)
+}
+
+fn draw_turn_restriction_icon(
+    ctx: &EventCtx,
+    t_type: TurnType,
+    sign_pt: Pt2D,
+    r1: &Road,
+    r1_angle: Angle,
+) -> GeomBatch {
+    let mut batch = GeomBatch::new();
+
+    // Which icon do we want?
+    let no_right_t = "system/assets/map/no_right_turn.svg";
+    let no_left_t = "system/assets/map/no_left_turn.svg";
+    let no_u_t = "system/assets/map/no_u_turn_left_to_right.svg";
+    let no_straight = "system/assets/map/no_straight_ahead.svg";
+    // TODO - what should we do with these?
+    let other_t = "system/assets/map/thought_bubble.svg";
+
+    let icon_path = match t_type {
+        TurnType::Right => no_right_t,
+        TurnType::Left => no_left_t,
+        TurnType::UTurn => no_u_t,
+        TurnType::Crosswalk => other_t,
+        TurnType::SharedSidewalkCorner => other_t,
+        TurnType::Straight => no_straight,
+        TurnType::UnmarkedCrossing => other_t,
+    };
+
+    // Draw the svg icon
+    let icon = GeomBatch::load_svg(ctx, icon_path)
+        .scale_to_fit_width(r1.get_width().inner_meters())
+        .centered_on(sign_pt)
+        .rotate_around_batch_center(r1_angle.rotate_degs(90.0));
+
+    batch.append(icon);
+    batch
+}
+
 /// Depending on the canvas zoom level, draws one of 2 things.
 // TODO Rethink filter styles and do something better than this.
 pub struct Toggle3Zoomed {
@@ -120,5 +173,23 @@ impl Toggle3Zoomed {
         if !self.unzoomed.maybe_draw(g) {
             self.draw_zoomed.draw(g);
         }
+    }
+}
+
+pub fn filter_svg_path(ft: FilterType) -> &'static str {
+    match ft {
+        FilterType::NoEntry => "system/assets/tools/no_entry.svg",
+        FilterType::WalkCycleOnly => "system/assets/tools/modal_filter.svg",
+        FilterType::BusGate => "system/assets/tools/bus_gate.svg",
+        FilterType::SchoolStreet => "system/assets/tools/school_street.svg",
+    }
+}
+
+pub fn filter_hide_color(ft: FilterType) -> Color {
+    match ft {
+        FilterType::WalkCycleOnly => Color::hex("#0b793a"),
+        FilterType::NoEntry => Color::RED,
+        FilterType::BusGate => *colors::BUS_ROUTE,
+        FilterType::SchoolStreet => Color::hex("#e31017"),
     }
 }

@@ -2,6 +2,7 @@ use lyon::math::Point;
 use lyon::path::Path;
 use lyon::tessellation;
 use lyon::tessellation::geometry_builder::{simple_builder, VertexBuffers};
+use usvg::TreeParsing;
 
 use abstutil::VecMap;
 use geom::{Bounds, Pt2D, Tessellation};
@@ -74,15 +75,12 @@ pub(crate) fn add_svg_inner(
             if let Some(ref fill) = p.fill {
                 let color = convert_color(&fill.paint, fill.opacity.get());
                 let geom = mesh_per_color.mut_or_insert(color, VertexBuffers::new);
-                if fill_tess
-                    .tessellate(
-                        &convert_path(p),
-                        &tessellation::FillOptions::tolerance(tolerance),
-                        &mut simple_builder(geom),
-                    )
-                    .is_err()
-                {
-                    return Err("Couldn't tessellate something".to_string());
+                if let Err(err) = fill_tess.tessellate(
+                    &convert_path(p),
+                    &tessellation::FillOptions::tolerance(tolerance),
+                    &mut simple_builder(geom),
+                ) {
+                    return Err(format!("Couldn't tessellate something: {err}"));
                 }
             }
 

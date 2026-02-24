@@ -1,7 +1,9 @@
 mod about;
+mod census;
 mod crossings;
 mod customize_boundary;
-mod design_ltn;
+mod cycle_network;
+pub mod design_ltn;
 mod freehand_boundary;
 mod per_resident_impact;
 mod pick_area;
@@ -10,9 +12,11 @@ mod route_planner;
 mod select_boundary;
 
 pub use about::About;
+pub use census::Census;
 pub use crossings::Crossings;
 pub use customize_boundary::CustomizeBoundary;
-pub use design_ltn::{DesignLTN, EditMode};
+pub use cycle_network::CycleNetwork;
+pub use design_ltn::{turn_restrictions::handle_edited_turn_restrictions, DesignLTN, EditMode};
 pub use freehand_boundary::FreehandBoundary;
 pub use per_resident_impact::PerResidentImpact;
 pub use pick_area::{PickArea, PickAreaStyle};

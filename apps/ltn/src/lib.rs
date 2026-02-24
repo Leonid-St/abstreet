@@ -8,7 +8,6 @@ use widgetry::tools::FutureLoader;
 use widgetry::{EventCtx, Settings, State};
 
 pub use app::{App, PerMap, Session, Transition};
-pub use filters::{Crossing, DiagonalFilter, Edits, FilterType, RoadFilter};
 pub use logic::NeighbourhoodID;
 pub use neighbourhood::{Cell, DistanceInterval, Neighbourhood};
 
@@ -20,12 +19,11 @@ extern crate log;
 mod app;
 mod components;
 mod export;
-mod filters;
-mod logic;
+pub mod logic;
 mod neighbourhood;
-mod pages;
+pub mod pages;
 mod render;
-mod save;
+pub mod save;
 
 pub fn main() {
     let settings = Settings::new("Low traffic neighbourhoods");
@@ -52,6 +50,7 @@ fn run(mut settings: Settings) {
     let mut opts = map_gui::options::Options::load_or_default();
     opts.color_scheme = map_gui::colors::ColorSchemeChoice::LTN;
     opts.show_building_driveways = false;
+    opts.show_building_outlines = false;
     // TODO Ideally we would have a better map model in the first place. The next best thing would
     // be to change these settings based on the map's country, but that's a bit tricky to do early
     // enough (before map_switched). So for now, assume primary use of this tool is in the UK,
@@ -141,10 +140,7 @@ fn setup_initial_states(
             if crate::save::Proposal::load_from_path(ctx, app, path.clone()).is_some() {
                 panic!("Consultation mode broken; go fix {path} manually");
             }
-            app.per_map.proposals.clear_all_but_current();
-            // TODO Kind of a weird hack -- rename this to "existing LTNs" so we can't overwrite
-            // it!
-            app.per_map.proposals.current_proposal.name = "existing LTNs".to_string();
+            app.per_map.proposals.force_current_to_basemap();
         }
 
         // Look for the neighbourhood containing one small street
@@ -227,8 +223,9 @@ pub fn run_wasm(root_dom_id: String, assets_base_url: String, assets_are_gzipped
     run(settings);
 }
 
-pub fn redraw_all_filters(ctx: &EventCtx, app: &mut App) {
-    app.per_map.draw_all_filters = app.edits().draw(ctx, &app.per_map.map);
+pub fn redraw_all_icons(ctx: &EventCtx, app: &mut App) {
+    app.per_map.draw_all_filters = render::render_modal_filters(ctx, &app.per_map.map);
+    app.per_map.draw_turn_restrictions = render::render_turn_restrictions(ctx, &app.per_map.map);
 }
 
 fn is_private(road: &Road) -> bool {
@@ -240,19 +237,12 @@ fn is_driveable(road: &Road, map: &Map) -> bool {
     PathConstraints::Car.can_use_road(road, map) && !is_private(road)
 }
 
-// The current edits and partitioning are stored deeply nested in App. For read-only access, we can
-// use a regular helper method. For writing, we can't, because we'll get a borrow error -- so
-// instead just use macros to make it less annoying to modify
-#[macro_export]
-macro_rules! mut_edits {
-    ($app:ident) => {
-        $app.per_map.proposals.current_proposal.edits
-    };
-}
-
+// The current partitioning is stored deeply nested in App. For read-only access, we can use a
+// regular helper method. For writing, we can't, because we'll get a borrow error -- so instead
+// just use macros to make it less annoying to modify
 #[macro_export]
 macro_rules! mut_partitioning {
     ($app:ident) => {
-        $app.per_map.proposals.current_proposal.partitioning
+        $app.per_map.proposals.list[$app.per_map.proposals.current].partitioning
     };
 }

@@ -55,7 +55,7 @@ impl PerResidentImpact {
         let labels = DrawSimpleRoadLabels::new(
             ctx,
             app,
-            colors::ROAD_LABEL,
+            colors::LOCAL_ROAD_LABEL,
             Box::new(move |r| label_roads.contains(&r.id)),
         );
 
@@ -88,8 +88,7 @@ impl PerResidentImpact {
                 timer.stop("prepare pathfinding before changes");
 
                 timer.start("prepare pathfinding after changes");
-                let mut params = map.routing_params().clone();
-                app.edits().update_routing_params(&mut params);
+                let params = map.routing_params_respecting_modal_filters();
                 let pathfinder_after =
                     Pathfinder::new_ch(map, params, vec![PathConstraints::Car], timer);
                 timer.stop("prepare pathfinding after changes");
@@ -107,7 +106,7 @@ impl PerResidentImpact {
             cell_outline: cell_outline.upload(ctx),
             buildings_inside,
             preserve_state: PreserveState::PerResidentImpact(
-                app.partitioning().all_blocks_in_neighbourhood(id),
+                app.partitioning().neighbourhood_to_blocks(id),
                 current_target,
             ),
 
@@ -362,8 +361,9 @@ impl State<App> for PerResidentImpact {
         g.redraw(&self.cell_outline);
         self.appwide_panel.draw(g);
         self.bottom_panel.draw(g);
-        app.session.layers.draw(g, app);
         self.labels.draw(g);
+        app.per_map.draw_major_road_labels.draw(g);
+        app.session.layers.draw(g, app);
         app.per_map.draw_all_filters.draw(g);
         self.world.draw(g);
         if let Some((_, ref draw)) = self.compare_routes {

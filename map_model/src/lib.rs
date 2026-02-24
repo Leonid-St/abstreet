@@ -29,34 +29,39 @@ extern crate anyhow;
 extern crate log;
 
 use std::collections::BTreeMap;
+use std::sync::{Arc, RwLock};
 
+use popgetter::CensusZone;
 use serde::{Deserialize, Serialize};
 
 use abstio::MapName;
 use abstutil::{
     deserialize_btreemap, deserialize_multimap, serialize_btreemap, serialize_multimap, MultiMap,
 };
-use geom::{Bounds, GPSBounds, Polygon};
+use geom::{Bounds, FindClosest, GPSBounds, Polygon};
 pub use osm2streets::{
     osm, BufferType, Direction, DrivingSide, IntersectionControl, IntersectionKind, LaneSpec,
     LaneType, MapConfig, NamePerLanguage, RestrictionType, NORMAL_LANE_THICKNESS,
     SIDEWALK_THICKNESS,
 };
-pub use raw_map::{Amenity, AmenityType, AreaType, CrossingType};
+pub use raw_map::{Amenity, AmenityType, AreaType, CrossingType, ExtraPOI, ExtraPOIType};
 
 pub use crate::city::City;
 pub use crate::edits::{
-    EditCmd, EditEffects, EditIntersection, EditRoad, MapEdits, PermanentMapEdits,
+    EditCmd, EditEffects, EditIntersection, EditIntersectionControl, EditRoad, MapEdits,
+    PermanentMapEdits,
 };
+
 pub use crate::make::RawToMapOptions;
 pub use crate::objects::area::{Area, AreaID};
 pub use crate::objects::building::{Building, BuildingID, BuildingType, OffstreetParking};
 pub use crate::objects::intersection::{Intersection, IntersectionID};
 pub use crate::objects::lane::{CommonEndpoint, Lane, LaneID, PARKING_LOT_SPOT_LENGTH};
+pub use crate::objects::modal_filter::{DiagonalFilter, FilterType, RoadFilter};
 pub use crate::objects::movement::{CompressedMovementID, Movement, MovementID};
 pub use crate::objects::parking_lot::{ParkingLot, ParkingLotID};
 pub use crate::objects::road::{
-    DirectedRoadID, OriginalRoad, Road, RoadID, RoadSideID, SideOfRoad,
+    Crossing, DirectedRoadID, OriginalRoad, Road, RoadID, RoadSideID, SideOfRoad,
 };
 pub use crate::objects::stop_signs::{ControlStopSign, RoadWithStopSign};
 pub use crate::objects::traffic_signals::{ControlTrafficSignal, Stage, StageType};
@@ -69,6 +74,7 @@ pub use crate::pathfind::{
     PathfinderCaching, RoutingParams,
 };
 pub use crate::traversable::{Position, Traversable, MAX_BIKE_SPEED, MAX_WALKING_SPEED};
+pub use map::turn_type_from_angles;
 
 mod city;
 pub mod connectivity;
@@ -85,6 +91,8 @@ mod traversable;
 pub struct Map {
     roads: Vec<Road>,
     intersections: Vec<Intersection>,
+    #[serde(skip_serializing, skip_deserializing)]
+    intersection_quad_tree: Arc<RwLock<Option<FindClosest<IntersectionID>>>>,
     buildings: Vec<Building>,
     #[serde(
         serialize_with = "serialize_btreemap",
@@ -115,6 +123,8 @@ pub struct Map {
     routing_params: RoutingParams,
     // Not the source of truth, just cached.
     zones: Vec<Zone>,
+    census_zones: Vec<(Polygon, CensusZone)>,
+    extra_pois: Vec<ExtraPOI>,
 
     name: MapName,
 

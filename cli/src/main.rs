@@ -155,6 +155,14 @@ enum Command {
         /// Use Geofabrik to grab OSM input if true, or Overpass if false. Overpass is faster.
         #[structopt(long)]
         use_geofabrik: bool,
+        /// Use osmium to clip osm.pbf files. Faster, but requires an external system dependency.
+        /// Falls back to something built-in and slower.
+        #[structopt(long)]
+        use_osmium: bool,
+        /// If true, roads without explicitly tagged sidewalks may be assigned sidewalks or shoulders.
+        /// If false, no inference will occur and separate sidewalks and crossings will be included.
+        #[structopt(long)]
+        inferred_sidewalks: bool,
         /// Downgrade crosswalks not matching a `highway=crossing` OSM node into unmarked crossings.
         #[structopt(long)]
         filter_crosswalks: bool,
@@ -162,6 +170,8 @@ enum Command {
         /// work if the boundary is in the UK.
         #[structopt(long)]
         create_uk_travel_demand_model: bool,
+        #[structopt(flatten)]
+        opts: map_model::RawToMapOptions,
     },
     /// Imports a one-shot A/B Street map from an .osm file in a single command.
     OneshotImport {
@@ -171,6 +181,11 @@ enum Command {
         /// derived from the .osm file, but borders will likely be broken or missing.
         #[structopt(long)]
         clip_path: Option<String>,
+        /// If true, roads without explicitly tagged sidewalks may be assigned sidewalks or shoulders.
+        /// If false, no inference will occur and separate sidewalks and crossings will be included.
+        #[structopt(long)]
+        inferred_sidewalks: bool,
+        /// Downgrade crosswalks not matching a `highway=crossing` OSM node into unmarked crossings.
         /// Downgrade crosswalks not matching a `highway=crossing` OSM node into unmarked crossings.
         #[structopt(long)]
         filter_crosswalks: bool,
@@ -278,29 +293,41 @@ async fn main() -> Result<()> {
             geojson_path,
             map_name,
             use_geofabrik,
+            use_osmium,
+            inferred_sidewalks,
             filter_crosswalks,
             create_uk_travel_demand_model,
+            opts,
         } => {
+            let mut options = convert_osm::Options::default();
+            options.map_config.inferred_sidewalks = inferred_sidewalks;
+            options.filter_crosswalks = filter_crosswalks;
             one_step_import::run(
                 geojson_path,
                 map_name,
                 use_geofabrik,
-                filter_crosswalks,
+                use_osmium,
+                options,
                 create_uk_travel_demand_model,
+                opts,
             )
             .await?
         }
         Command::OneshotImport {
             osm_input,
             clip_path,
+            inferred_sidewalks,
             filter_crosswalks,
             create_uk_travel_demand_model,
             opts,
         } => {
+            let mut options = convert_osm::Options::default();
+            options.map_config.inferred_sidewalks = inferred_sidewalks;
+            options.filter_crosswalks = filter_crosswalks;
             importer::oneshot(
                 osm_input,
                 clip_path,
-                filter_crosswalks,
+                options,
                 create_uk_travel_demand_model,
                 opts,
             )

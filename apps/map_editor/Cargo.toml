@@ -15,11 +15,11 @@ wasm = ["getrandom/js", "wasm-bindgen", "widgetry/wasm-backend"]
 abstio = { path = "../../abstio" }
 abstutil = { path = "../../abstutil" }
 fs-err = { workspace = true }
-geom = { path = "../../geom" }
+geom = { workspace = true }
 getrandom = { workspace = true, optional = true }
 log = { workspace = true }
 raw_map = { path = "../../raw_map" }
-serde = { workspace = true }
+serde = { workspace = true, features=["derive"] }
 osm2streets = { git = "https://github.com/a-b-street/osm2streets" }
 structopt = { workspace = true }
 wasm-bindgen = { workspace = true, optional = true }

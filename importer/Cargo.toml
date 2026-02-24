@@ -14,11 +14,11 @@ abstutil = { path = "../abstutil" }
 anyhow = { workspace = true }
 collisions = { path = "../collisions" }
 convert_osm = { path = "../convert_osm" }
-csv = "1.1.4"
+csv = { workspace = true }
 fs-err = { workspace = true }
 geo = { workspace = true }
 geojson = { workspace = true }
-geom = { path = "../geom" }
+geom = { workspace = true }
 gdal = { version = "0.14.0", optional = true, features = ["bindgen"] }
 kml = { path = "../kml" }
 log = { workspace = true }
@@ -27,7 +27,7 @@ popdat = { path = "../popdat" }
 rand  = "0.8.3"
 rand_xorshift = { workspace = true }
 raw_map = { path = "../raw_map" }
-serde = { workspace = true }
+serde = { workspace = true, features=["derive"] }
 serde_json = { workspace = true }
 sim = { path = "../sim" }
 osm2streets = { git = "https://github.com/a-b-street/osm2streets" }

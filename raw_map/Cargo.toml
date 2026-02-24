@@ -7,8 +7,9 @@ edition = "2021"
 [dependencies]
 abstio = { path = "../abstio" }
 abstutil = { path = "../abstutil" }
-geom = { path = "../geom" }
-serde = { workspace = true }
+geom = { workspace = true }
+serde = { workspace = true, features=["derive"] }
 osm2streets = { git = "https://github.com/a-b-street/osm2streets" }
+popgetter = { path = "../popgetter" }
 strum = "0.24.1"
 strum_macros = "0.24.3"

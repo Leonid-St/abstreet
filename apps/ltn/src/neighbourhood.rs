@@ -6,22 +6,35 @@ use geom::{ArrowCap, Distance, PolyLine, Polygon};
 use map_model::{osm, Direction, IntersectionID, Map, RoadID};
 use widgetry::{Drawable, EventCtx, GeomBatch};
 
-use crate::logic::{CustomBoundary, Shortcuts};
-use crate::{is_private, App, Edits, NeighbourhoodID};
+use crate::logic::{possible_destination_roads, CustomBoundary, Partitioning, Shortcuts};
+use crate::{is_private, App, NeighbourhoodID};
 
 // Once constructed, a Neighbourhood is immutable
 pub struct Neighbourhood {
     pub id: NeighbourhoodID,
 
     // Input
+    /// Intersections which form the boundary of the neighbourhood. This set includes any intersection which is
+    /// connected to a road which is part of the neighbourhood's perimeter.
+    /// The roads which form the perimeter of the neighbourhood are the union of `perimeter_roads` and `suspicious_perimeter_roads`.
     pub borders: BTreeSet<IntersectionID>,
+    /// Intersections which are entirely inside the neighbourhood, and only connect interior roads to other interior roads.
     pub interior_intersections: BTreeSet<IntersectionID>,
     pub boundary_polygon: Polygon,
 
     // Derived stuff
+    /// Roads which are either (a) entirely inside the neighbourhood and (b) roads which are part of `suspicious_perimeter_roads`.
     pub interior_roads: BTreeSet<RoadID>,
+    /// Roads which form part of the neighbourhood's perimeter, and are classified as arterial roads based on their OSM tags.
+    /// `suspicious_perimeter_roads` are NOT included in `perimeter_roads`.
     pub perimeter_roads: BTreeSet<RoadID>,
+    /// Roads which form part of the neighbourhood's perimeter, _**but**_ are classified as local roads based on their OSM tags.
+    /// `suspicious_perimeter_roads` are always a subset of `interior_roads`.
     pub suspicious_perimeter_roads: BTreeSet<RoadID>,
+    /// Roads which are lie outside the `boundary_polygon` but could potentially be connected to an `interior_road` or
+    /// `perimeter_road` by either a `road.turn_restrictions`, or `road.complicated_turn_restrictions`. `finish_init()` populates
+    /// this field.
+    pub connected_exterior_roads: BTreeSet<RoadID>,
 
     pub cells: Vec<Cell>,
     pub shortcuts: Shortcuts,
@@ -55,7 +68,7 @@ impl Cell {
                 // Design choice: when we have a filter right at the entrance of a neighbourhood, it
                 // creates its own little cell allowing access to just the very beginning of the
                 // road. Let's not draw anything for that.
-                if app.edits().roads.contains_key(r) {
+                if road.modal_filter.is_some() {
                     continue;
                 }
 
@@ -106,12 +119,19 @@ pub struct DistanceInterval {
 
 impl Neighbourhood {
     pub fn new(app: &App, id: NeighbourhoodID) -> Neighbourhood {
-        if let Some(custom) = app.partitioning().custom_boundaries.get(&id) {
-            return Self::new_custom(app, id, custom.clone());
+        Self::new_without_app(&app.per_map.map, app.partitioning(), id)
+    }
+
+    pub fn new_without_app(
+        map: &Map,
+        partitioning: &Partitioning,
+        id: NeighbourhoodID,
+    ) -> Neighbourhood {
+        if let Some(custom) = partitioning.custom_boundaries.get(&id) {
+            return Self::new_custom(map, id, custom.clone());
         }
 
-        let map = &app.per_map.map;
-        let orig_perimeter = app.partitioning().neighbourhood_block(id).perimeter.clone();
+        let orig_perimeter = partitioning.neighbourhood_block(id).perimeter.clone();
 
         let mut n = Neighbourhood {
             id,
@@ -121,6 +141,7 @@ impl Neighbourhood {
             interior_intersections: BTreeSet::new(),
             boundary_polygon: Polygon::dummy(),
             suspicious_perimeter_roads: BTreeSet::new(),
+            connected_exterior_roads: BTreeSet::new(),
 
             cells: Vec::new(),
             shortcuts: Shortcuts::empty(),
@@ -129,41 +150,33 @@ impl Neighbourhood {
         // The neighbourhood's perimeter hugs the "interior" of the neighbourhood. If we just use
         // the other side of the perimeter road, the highlighted area nicely shows the boundary
         // road too. (But sometimes this breaks, of course)
-        n.boundary_polygon = match orig_perimeter
-            .clone()
-            .flip_side_of_road()
-            .to_block(&app.per_map.map)
-        {
+        n.boundary_polygon = match orig_perimeter.clone().flip_side_of_road().to_block(map) {
             Ok(block) => block.polygon,
-            Err(_) => {
-                orig_perimeter
-                    .clone()
-                    .to_block(&app.per_map.map)
-                    .unwrap()
-                    .polygon
-            }
+            Err(_) => orig_perimeter.clone().to_block(map).unwrap().polygon,
         };
-        if let Some(polygon) = app
-            .partitioning()
-            .get_info(id)
-            .override_drawing_boundary
-            .clone()
-        {
+        if let Some(polygon) = partitioning.get_info(id).override_drawing_boundary.clone() {
             n.boundary_polygon = polygon;
         }
 
         for id in &orig_perimeter.roads {
-            n.perimeter_roads.insert(id.road);
             let road = map.get_r(id.road);
-            n.borders.insert(road.src_i);
-            n.borders.insert(road.dst_i);
+            // Part of the perimeter may be a local road. This is all it takes to correct cell and
+            // shortcut calculation, and allow edits on local perimeter roads.
+            if road.get_rank() == osm::RoadRank::Local {
+                n.interior_roads.insert(road.id);
+                n.suspicious_perimeter_roads.insert(road.id);
+            } else {
+                n.perimeter_roads.insert(road.id);
+                n.borders.insert(road.src_i);
+                n.borders.insert(road.dst_i);
+            }
         }
 
-        n.finish_init(app);
+        n.finish_init(map);
         n
     }
 
-    fn new_custom(app: &App, id: NeighbourhoodID, custom: CustomBoundary) -> Neighbourhood {
+    fn new_custom(map: &Map, id: NeighbourhoodID, custom: CustomBoundary) -> Neighbourhood {
         let mut n = Neighbourhood {
             id,
             interior_roads: custom.interior_roads,
@@ -173,17 +186,16 @@ impl Neighbourhood {
             interior_intersections: BTreeSet::new(),
             boundary_polygon: custom.boundary_polygon,
             suspicious_perimeter_roads: BTreeSet::new(),
+            connected_exterior_roads: BTreeSet::new(),
 
             cells: Vec::new(),
             shortcuts: Shortcuts::empty(),
         };
-        n.finish_init(app);
+        n.finish_init(map);
         n
     }
 
-    fn finish_init(&mut self, app: &App) {
-        let map = &app.per_map.map;
-
+    fn finish_init(&mut self, map: &Map) {
         for r in &self.interior_roads {
             let road = map.get_r(*r);
             for i in [road.src_i, road.dst_i] {
@@ -193,17 +205,47 @@ impl Neighbourhood {
             }
         }
 
-        self.cells = find_cells(map, &self.interior_roads, &self.borders, &app.edits());
+        // Add every connected road into connected_exterior_roads
+        let mut exterior: BTreeSet<RoadID> = BTreeSet::new();
+        for r in [&self.perimeter_roads, &self.interior_roads]
+            .into_iter()
+            .flatten()
+        {
+            exterior.extend(possible_destination_roads(map, *r, None));
+        }
+
+        debug!(
+            "BUILDING CONNECTED_EXTERIOR_ROADS: exterior.len() = {}",
+            exterior.len()
+        );
+        debug!(
+            "BUILDING CONNECTED_EXTERIOR_ROADS: perimeter_roads.len() = {}",
+            &self.perimeter_roads.len()
+        );
+        debug!(
+            "BUILDING CONNECTED_EXTERIOR_ROADS: interior_roads.len() = {}",
+            &self.interior_roads.len()
+        );
+
+        // Now remove the interior and perimeter roads
+        exterior.retain(|r| !self.perimeter_roads.contains(r) & !self.interior_roads.contains(r));
+        self.connected_exterior_roads = exterior;
+
+        debug!(
+            "BUILDING CONNECTED_EXTERIOR_ROADS: connected_exterior_roads.len() = {}",
+            &self.connected_exterior_roads.len()
+        );
+
+        self.edits_changed(map);
+    }
+
+    /// Recalculates cells and shortcuts after a relevant edit
+    pub fn edits_changed(&mut self, map: &Map) {
+        self.cells = find_cells(map, &self.interior_roads, &self.borders);
 
         // TODO The timer could be nice for large areas. But plumbing through one everywhere is
         // tedious, and would hit a nested start_iter bug anyway.
-        self.shortcuts = Shortcuts::new(app, self, &mut abstutil::Timer::throwaway());
-
-        for r in &self.perimeter_roads {
-            if map.get_r(*r).get_rank() == osm::RoadRank::Local {
-                self.suspicious_perimeter_roads.insert(*r);
-            }
-        }
+        self.shortcuts = Shortcuts::new(map, self, &mut abstutil::Timer::throwaway());
     }
 
     pub fn fade_irrelevant(&self, ctx: &EventCtx, app: &App) -> Drawable {
@@ -225,13 +267,12 @@ fn find_cells(
     map: &Map,
     interior_roads: &BTreeSet<RoadID>,
     borders: &BTreeSet<IntersectionID>,
-    edits: &Edits,
 ) -> Vec<Cell> {
     let mut cells = Vec::new();
     let mut visited = BTreeSet::new();
 
     for start in interior_roads {
-        if visited.contains(start) || edits.roads.contains_key(start) {
+        if visited.contains(start) || map.get_r(*start).modal_filter.is_some() {
             continue;
         }
         let start = *start;
@@ -252,15 +293,14 @@ fn find_cells(
             continue;
         }
 
-        let cell = floodfill(map, start, borders, interior_roads, &edits);
+        let cell = floodfill(map, start, borders, interior_roads);
         visited.extend(cell.roads.keys().cloned());
 
         cells.push(cell);
     }
 
     // Filtered roads right along the perimeter have a tiny cell
-    for (r, filter) in &edits.roads {
-        let road = map.get_r(*r);
+    for (road, filter) in map.all_roads_with_modal_filter() {
         if borders.contains(&road.src_i) {
             let mut cell = Cell {
                 roads: BTreeMap::new(),
@@ -299,7 +339,6 @@ fn floodfill(
     start: RoadID,
     neighbourhood_borders: &BTreeSet<IntersectionID>,
     interior_roads: &BTreeSet<RoadID>,
-    edits: &Edits,
 ) -> Cell {
     let mut visited_roads: BTreeMap<RoadID, DistanceInterval> = BTreeMap::new();
     let mut cell_borders = BTreeSet::new();
@@ -307,7 +346,7 @@ fn floodfill(
     let mut queue = vec![start];
 
     // The caller should handle this case
-    assert!(!edits.roads.contains_key(&start));
+    assert!(map.get_r(start).modal_filter.is_none());
     assert!(crate::is_driveable(map.get_r(start), map));
 
     while !queue.is_empty() {
@@ -335,12 +374,12 @@ fn floodfill(
 
             for next in &map.get_i(i).roads {
                 let next_road = map.get_r(*next);
-                if let Some(filter) = edits.intersections.get(&i) {
+                if let Some(ref filter) = map.get_i(i).modal_filter {
                     if !filter.allows_turn(current.id, *next) {
                         continue;
                     }
                 }
-                if let Some(filter) = edits.roads.get(next) {
+                if let Some(ref filter) = map.get_r(*next).modal_filter {
                     // Which ends of the filtered road have we reached?
                     let mut visited_start = next_road.src_i == i;
                     let mut visited_end = next_road.dst_i == i;

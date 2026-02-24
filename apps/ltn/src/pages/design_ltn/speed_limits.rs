@@ -1,21 +1,22 @@
 use geom::{Speed, UnitFmt};
 use widgetry::mapspace::{World, WorldOutcome};
 use widgetry::tools::ColorLegend;
-use widgetry::{EventCtx, Text, Transition, Widget};
+use widgetry::{EventCtx, Text, Widget};
 
 use super::{EditOutcome, Obj};
 use crate::render::colors;
-use crate::{logic, App, Neighbourhood};
+use crate::{App, Neighbourhood};
 
 pub fn widget(ctx: &mut EventCtx) -> Widget {
     ColorLegend::categories(
         ctx,
         vec![
-            (colors::SPEED_LIMITS[0], "<= 10mph"),
-            (colors::SPEED_LIMITS[1], "<= 20mph"),
-            (colors::SPEED_LIMITS[2], "<= 30mph"),
-            (colors::SPEED_LIMITS[3], "> 30mph"),
+            (colors::SPEED_LIMITS[0], "0mph"),
+            (colors::SPEED_LIMITS[1], "10"),
+            (colors::SPEED_LIMITS[2], "20"),
+            (colors::SPEED_LIMITS[3], "30"),
         ],
+        ">30",
     )
 }
 
@@ -57,11 +58,7 @@ pub fn make_world(ctx: &mut EventCtx, app: &App, neighbourhood: &Neighbourhood) 
     world
 }
 
-pub fn handle_world_outcome(
-    ctx: &mut EventCtx,
-    app: &mut App,
-    outcome: WorldOutcome<Obj>,
-) -> EditOutcome {
+pub fn handle_world_outcome(app: &mut App, outcome: WorldOutcome<Obj>) -> EditOutcome {
     match outcome {
         WorldOutcome::ClickedObject(Obj::Road(r)) => {
             if app.per_map.map.get_r(r).speed_limit == Speed::miles_per_hour(20.0) {
@@ -72,10 +69,9 @@ pub fn handle_world_outcome(
             edits.commands.push(app.per_map.map.edit_road_cmd(r, |new| {
                 new.speed_limit = Speed::miles_per_hour(20.0);
             }));
+            app.apply_edits(edits);
 
-            logic::map_edits::modify_road(ctx, app, r, edits);
-
-            EditOutcome::Transition(Transition::Recreate)
+            EditOutcome::UpdateAll
         }
         _ => EditOutcome::Nothing,
     }

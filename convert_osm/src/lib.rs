@@ -1,6 +1,4 @@
 #[macro_use]
-extern crate anyhow;
-#[macro_use]
 extern crate log;
 
 use std::collections::{HashMap, HashSet};
@@ -29,7 +27,8 @@ pub struct Options {
     pub extra_buildings: Option<String>,
     /// Configure public transit using this URL to a static GTFS feed in .zip format.
     pub gtfs_url: Option<String>,
-    pub elevation: bool,
+    /// Path to a GeoTIFF file in EPSG:4326 to use for elevation data
+    pub elevation_geotiff: Option<String>,
     /// Only include crosswalks that match a `highway=crossing` OSM node.
     pub filter_crosswalks: bool,
 }
@@ -43,7 +42,7 @@ impl Options {
             private_offstreet_parking: PrivateOffstreetParking::FixedPerBldg(1),
             extra_buildings: None,
             gtfs_url: None,
-            elevation: false,
+            elevation_geotiff: None,
             filter_crosswalks: false,
         }
     }
@@ -91,7 +90,9 @@ pub fn convert(
     map.streets.config = opts.map_config.clone();
 
     let clip_pts = clip_path.map(|path| LonLat::read_geojson_polygon(&path).unwrap());
+    timer.start("extract all from OSM");
     let extract = extract::extract_osm(&mut map, &osm_input_path, clip_pts, &opts, timer);
+    timer.stop("extract all from OSM");
     let pt_to_road =
         streets_reader::split_ways::split_up_roads(&mut map.streets, extract.osm, timer);
 
@@ -99,8 +100,9 @@ pub fn convert(
     map.streets.retain_roads(|r| r.src_i != r.dst_i);
 
     map.bus_routes_on_roads = extract.bus_routes_on_roads;
+    map.extra_pois = extract.extra_pois;
 
-    clip_map(&mut map);
+    clip_map(&mut map, timer);
 
     for i in map.streets.intersections.keys() {
         map.elevation_per_intersection.insert(*i, Distance::ZERO);
@@ -110,6 +112,7 @@ pub fn convert(
     }
 
     // Remember OSM tags for all roads. Do this before apply_parking, which looks at tags
+    timer.start("preserve OSM tags");
     let mut way_ids = HashSet::new();
     for r in map.streets.roads.values() {
         for id in &r.osm_ids {
@@ -121,19 +124,22 @@ pub fn convert(
             map.osm_tags.insert(id, way.tags);
         }
     }
+    timer.stop("preserve OSM tags");
 
     parking::apply_parking(&mut map, &opts, timer);
 
+    timer.start("use barrier and crossing nodes");
     use_barrier_nodes(&mut map, extract.barrier_nodes, &pt_to_road);
     use_crossing_nodes(&mut map, &extract.crossing_nodes, &pt_to_road);
+    timer.stop("use barrier and crossing nodes");
 
     if opts.filter_crosswalks {
         filter_crosswalks(&mut map, extract.crossing_nodes, pt_to_road, timer);
     }
 
-    if opts.elevation {
+    if let Some(ref path) = opts.elevation_geotiff {
         timer.start("add elevation data");
-        if let Err(err) = elevation::add_data(&mut map) {
+        if let Err(err) = elevation::add_data(&mut map, path, timer) {
             error!("No elevation data: {}", err);
         }
         timer.stop("add elevation data");
@@ -145,6 +151,12 @@ pub fn convert(
     if opts.gtfs_url.is_some() {
         gtfs::import(&mut map).unwrap();
     }
+
+    timer.start("Add census data");
+    if let Err(err) = add_census(&mut map) {
+        error!("Skipping census data: {err}");
+    }
+    timer.stop("Add census data");
 
     if map.name == MapName::new("gb", "bristol", "east") {
         bristol_hack(&mut map);
@@ -227,33 +239,45 @@ fn bristol_hack(map: &mut RawMap) {
     map.extra_road_data.insert(id, ExtraRoadData::default());
 }
 
-fn clip_map(map: &mut RawMap) {
+fn clip_map(map: &mut RawMap, timer: &mut Timer) {
     let boundary_polygon = map.streets.boundary_polygon.clone();
 
-    map.buildings.retain(|_, b| {
-        b.polygon
-            .get_outer_ring()
-            .points()
-            .iter()
-            .all(|pt| boundary_polygon.contains_pt(*pt))
-    });
+    map.buildings = timer.retain_parallelized(
+        "clip buildings to boundary",
+        std::mem::take(&mut map.buildings),
+        |b| {
+            b.polygon
+                .get_outer_ring()
+                .points()
+                .iter()
+                .all(|pt| boundary_polygon.contains_pt(*pt))
+        },
+    );
 
-    let mut result_areas = Vec::new();
-    for orig_area in map.areas.drain(..) {
-        // If clipping fails, giving up on some areas is fine
-        if let Ok(list) = map
-            .streets
-            .boundary_polygon
-            .intersection(&orig_area.polygon)
-        {
-            for polygon in list {
-                let mut area = orig_area.clone();
-                area.polygon = polygon;
-                result_areas.push(area);
-            }
-        }
-    }
-    map.areas = result_areas;
+    map.areas = timer
+        .parallelize(
+            "clip areas to boundary",
+            std::mem::take(&mut map.areas),
+            |orig_area| {
+                let mut result = Vec::new();
+                // If clipping fails, giving up on some areas is fine
+                if let Ok(list) = map
+                    .streets
+                    .boundary_polygon
+                    .intersection(&orig_area.polygon)
+                {
+                    for polygon in list {
+                        let mut area = orig_area.clone();
+                        area.polygon = polygon;
+                        result.push(area);
+                    }
+                }
+                result
+            },
+        )
+        .into_iter()
+        .flatten()
+        .collect();
 
     // TODO Don't touch parking lots. It'll be visually obvious if a clip intersects one of these.
     // The boundary should be manually adjusted.
@@ -360,4 +384,27 @@ fn filter_crosswalks(
             }
         }
     }
+}
+
+fn add_census(map: &mut RawMap) -> Result<()> {
+    // TODO Fixed to one area right now. Assumes the file exists.
+    if map.name.city.country != "gb" {
+        return Ok(());
+    }
+    let input_path = "data/input/shared/popgetter/england.topojson";
+    let boundary = map
+        .streets
+        .boundary_polygon
+        .to_geo_wgs84(&map.streets.gps_bounds);
+    for (geo_polygon, census_zone) in popgetter::clip_zones(input_path, boundary)? {
+        match Polygon::from_geo_wgs84(geo_polygon, &map.streets.gps_bounds) {
+            Ok(polygon) => {
+                map.census_zones.push((polygon, census_zone));
+            }
+            Err(err) => {
+                warn!("Skipping census zone {}: {}", census_zone.id, err);
+            }
+        }
+    }
+    Ok(())
 }

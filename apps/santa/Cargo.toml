@@ -15,7 +15,7 @@ wasm = ["getrandom/js", "map_gui/wasm", "wasm-bindgen", "widgetry/wasm-backend"]
 abstio = { path = "../../abstio" }
 abstutil = { path = "../../abstutil" }
 anyhow = { workspace = true }
-geom = { path = "../../geom" }
+geom = { workspace = true }
 getrandom = { workspace = true, optional = true }
 kml = { path = "../../kml" }
 log = { workspace = true }
@@ -23,7 +23,7 @@ map_gui = { path = "../../map_gui" }
 map_model = { path = "../../map_model" }
 rand = { workspace = true }
 rand_xorshift = { workspace = true }
-rodio = { version = "0.16.0", default-features = false, features = ["vorbis"] }
-serde = { workspace = true }
+rodio = { version = "0.17.3", default-features = false, features = ["vorbis"] }
+serde = { workspace = true, features=["derive"] }
 wasm-bindgen = { workspace = true, optional = true }
 widgetry = { path = "../../widgetry" }

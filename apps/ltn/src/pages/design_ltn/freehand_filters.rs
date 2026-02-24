@@ -1,18 +1,16 @@
 use geom::PolyLine;
+use map_model::{DiagonalFilter, FilterType, RoadFilter};
 use widgetry::EventCtx;
 
 use super::{modals, EditMode, EditOutcome};
-use crate::{
-    mut_edits, redraw_all_filters, App, DiagonalFilter, FilterType, Neighbourhood, RoadFilter,
-    Transition,
-};
+use crate::{redraw_all_icons, App, Neighbourhood, Transition};
 
 pub fn event(ctx: &mut EventCtx, app: &mut App, neighbourhood: &Neighbourhood) -> EditOutcome {
     if let EditMode::FreehandFilters(ref mut lasso) = app.session.edit_mode {
         if let Some(pl) = lasso.event(ctx) {
             // Reset the tool
             app.session.edit_mode = EditMode::Filters;
-            EditOutcome::Transition(make_filters_along_path(ctx, app, neighbourhood, pl))
+            make_filters_along_path(ctx, app, neighbourhood, pl)
         } else {
             // Do this instead of EditOutcome::Nothing to interrupt other processing
             EditOutcome::Transition(Transition::Keep)
@@ -27,16 +25,16 @@ fn make_filters_along_path(
     app: &mut App,
     neighbourhood: &Neighbourhood,
     path: PolyLine,
-) -> Transition {
+) -> EditOutcome {
     let mut oneways = Vec::new();
     let mut bus_roads = Vec::new();
 
-    app.per_map.proposals.before_edit();
+    let mut edits = app.per_map.map.get_edits().clone();
     for r in &neighbourhood.interior_roads {
-        if app.edits().roads.contains_key(r) {
+        let road = app.per_map.map.get_r(*r);
+        if road.modal_filter.is_some() {
             continue;
         }
-        let road = app.per_map.map.get_r(*r);
         // Don't show error messages
         if road.is_deadend_for_driving(&app.per_map.map) {
             continue;
@@ -69,24 +67,37 @@ fn make_filters_along_path(
                 }
             }
 
-            mut_edits!(app)
-                .roads
-                .insert(*r, RoadFilter::new_by_user(dist, filter_type));
+            edits
+                .commands
+                .push(app.per_map.map.edit_road_cmd(*r, |new| {
+                    new.modal_filter = Some(RoadFilter::new(dist, filter_type));
+                }));
         }
     }
     for i in &neighbourhood.interior_intersections {
         if app.per_map.map.get_i(*i).polygon.intersects_polyline(&path) {
             // We probably won't guess the right one, but make an attempt
-            DiagonalFilter::cycle_through_alternatives(app, *i);
+            edits
+                .commands
+                .extend(DiagonalFilter::cycle_through_alternatives(
+                    &app.per_map.map,
+                    *i,
+                    app.session.filter_type,
+                ));
         }
     }
-    redraw_all_filters(ctx, app);
+    app.apply_edits(edits);
+    redraw_all_icons(ctx, app);
 
     if !oneways.is_empty() {
-        Transition::Push(modals::ResolveOneWayAndFilter::new_state(ctx, oneways))
+        EditOutcome::Transition(Transition::Push(modals::ResolveOneWayAndFilter::new_state(
+            ctx, oneways,
+        )))
     } else if !bus_roads.is_empty() {
-        Transition::Push(modals::ResolveBusGate::new_state(ctx, app, bus_roads))
+        EditOutcome::Transition(Transition::Push(modals::ResolveBusGate::new_state(
+            ctx, app, bus_roads,
+        )))
     } else {
-        Transition::Recreate
+        EditOutcome::UpdateAll
     }
 }

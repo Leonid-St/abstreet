@@ -1,11 +1,14 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 
 use anyhow::Result;
 use lyon::geom::{CubicBezierSegment, Point, QuadraticBezierSegment};
 
-use geom::{Angle, PolyLine, Pt2D};
+use geom::{PolyLine, Pt2D};
 
-use crate::{Intersection, Lane, LaneID, LaneType, Map, RoadID, Turn, TurnID, TurnType};
+use crate::{
+    map::turn_type_from_road_geom, Intersection, Lane, LaneID, LaneType, Map, RoadID, Turn, TurnID,
+    TurnType,
+};
 
 /// Generate all driving and walking turns at an intersection, accounting for OSM turn restrictions.
 pub fn make_all_turns(map: &Map, i: &Intersection) -> Vec<Turn> {
@@ -138,8 +141,6 @@ pub fn verify_vehicle_connectivity(turns: &[Turn], i: &Intersection, map: &Map) 
 fn make_vehicle_turns(i: &Intersection, map: &Map) -> Vec<Turn> {
     let mut turns = Vec::new();
 
-    let expected_turn_types = expected_turn_types_for_four_way(i, map);
-
     // Just generate every possible combination of turns between incoming and outgoing lanes.
     let is_deadend = i.is_deadend_for_driving(map);
     for src in &i.incoming_lanes {
@@ -168,34 +169,7 @@ fn make_vehicle_turns(i: &Intersection, map: &Map) -> Vec<Turn> {
                 continue;
             }
 
-            let from_angle = src.last_line().angle();
-            let to_angle = dst.first_line().angle();
-            let mut turn_type = turn_type_from_angles(from_angle, to_angle);
-            if turn_type == TurnType::UTurn {
-                // Lots of false positives when classifying these just based on angles. So also
-                // require the road names to match.
-                if map.get_parent(src.id).get_name(None) != map.get_parent(dst.id).get_name(None) {
-                    // Distinguish really sharp lefts/rights based on clockwiseness
-                    if from_angle.simple_shortest_rotation_towards(to_angle) < 0.0 {
-                        turn_type = TurnType::Right;
-                    } else {
-                        turn_type = TurnType::Left;
-                    }
-                }
-            } else if let Some(expected_type) = expected_turn_types
-                .as_ref()
-                .and_then(|e| e.get(&(src.id.road, dst.id.road)))
-            {
-                // At some 4-way intersections, roads meet at strange angles, throwing off
-                // turn_type_from_angles. Correct it based on relative ordering.
-                if turn_type != *expected_type {
-                    warn!(
-                        "Turn from {} to {} looks like {:?} by angle, but is {:?} by ordering",
-                        src.id.road, dst.id.road, turn_type, expected_type
-                    );
-                    turn_type = *expected_type;
-                }
-            }
+            let turn_type = turn_type_from_lane_geom(src, dst, i, map);
 
             let geom = curvey_turn(src, dst, i)
                 .unwrap_or_else(|_| PolyLine::must_new(vec![src.last_pt(), dst.first_pt()]));
@@ -213,6 +187,17 @@ fn make_vehicle_turns(i: &Intersection, map: &Map) -> Vec<Turn> {
     }
 
     turns
+}
+
+fn turn_type_from_lane_geom(src: &Lane, dst: &Lane, i: &Intersection, map: &Map) -> TurnType {
+    turn_type_from_road_geom(
+        map.get_r(src.id.road),
+        src.last_line().angle(),
+        map.get_r(dst.id.road),
+        dst.last_line().angle(),
+        i,
+        map,
+    )
 }
 
 fn curvey_turn(src: &Lane, dst: &Lane, i: &Intersection) -> Result<PolyLine> {
@@ -379,46 +364,4 @@ fn remove_merging_turns(map: &Map, input: Vec<Turn>, turn_type: TurnType) -> Vec
         }
     }
     turns
-}
-
-fn turn_type_from_angles(from: Angle, to: Angle) -> TurnType {
-    let diff = from.simple_shortest_rotation_towards(to);
-    // This is a pretty arbitrary parameter, but a difference of 30 degrees seems reasonable for
-    // some observed cases.
-    if diff.abs() < 30.0 {
-        TurnType::Straight
-    } else if diff.abs() > 135.0 {
-        TurnType::UTurn
-    } else if diff < 0.0 {
-        // Clockwise rotation
-        TurnType::Right
-    } else {
-        // Counter-clockwise rotation
-        TurnType::Left
-    }
-}
-
-fn expected_turn_types_for_four_way(
-    i: &Intersection,
-    map: &Map,
-) -> Option<HashMap<(RoadID, RoadID), TurnType>> {
-    let roads = i.get_sorted_incoming_roads(map);
-    if roads.len() != 4 {
-        return None;
-    }
-
-    // Just based on relative ordering around the intersection, turns (from road, to road, should
-    // have this type)
-    let mut expected_turn_types: HashMap<(RoadID, RoadID), TurnType> = HashMap::new();
-    for (offset, turn_type) in [
-        (1, TurnType::Left),
-        (2, TurnType::Straight),
-        (3, TurnType::Right),
-    ] {
-        for from_idx in 0..roads.len() {
-            let to = *abstutil::wraparound_get(&roads, (from_idx as isize) + offset);
-            expected_turn_types.insert((roads[from_idx], to), turn_type);
-        }
-    }
-    Some(expected_turn_types)
 }

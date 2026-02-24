@@ -7,9 +7,9 @@ edition = "2021"
 abstio = { path = "../abstio" }
 abstutil = { path = "../abstutil" }
 anyhow = { workspace = true }
-geom = { path = "../geom" }
+geom = { workspace = true }
 log = { workspace = true }
 map_model = { path = "../map_model" }
 rand = "0.8.5"
 rand_xorshift = { workspace = true }
-serde = { workspace = true }
+serde = { workspace = true, features=["derive"] }

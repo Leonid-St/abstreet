@@ -4,7 +4,10 @@ use abstutil::{MultiMap, Tags, Timer};
 use geom::{Distance, FindClosest, GPSBounds, HashablePt2D, LonLat, Polygon, Pt2D, Ring};
 use osm2streets::osm::{OsmID, RelationID, WayID};
 use osm2streets::{osm, NamePerLanguage};
-use raw_map::{Amenity, AreaType, CrossingType, RawArea, RawBuilding, RawMap, RawParkingLot};
+use raw_map::{
+    Amenity, AreaType, CrossingType, ExtraPOI, ExtraPOIType, RawArea, RawBuilding, RawMap,
+    RawParkingLot,
+};
 
 use crate::Options;
 use streets_reader::osm_reader::glue_multipolygon;
@@ -18,6 +21,7 @@ pub struct Extract {
     pub crossing_nodes: HashSet<(HashablePt2D, CrossingType)>,
     /// Some kind of barrier nodes at these points.
     pub barrier_nodes: Vec<(osm::NodeID, HashablePt2D)>,
+    pub extra_pois: Vec<ExtraPOI>,
 }
 
 pub fn extract_osm(
@@ -27,9 +31,9 @@ pub fn extract_osm(
     opts: &Options,
     timer: &mut Timer,
 ) -> Extract {
-    let osm_xml = fs_err::read_to_string(osm_input_path).unwrap();
+    let osm_input_bytes = fs_err::read(osm_input_path).unwrap();
     let mut doc = streets_reader::osm_reader::Document::read(
-        &osm_xml,
+        &osm_input_bytes,
         clip_pts.as_ref().map(|pts| GPSBounds::from(pts.clone())),
         timer,
     )
@@ -37,15 +41,17 @@ pub fn extract_osm(
     // If GPSBounds aren't provided above, they'll be computed in the Document
     map.streets.gps_bounds = doc.gps_bounds.clone().unwrap();
 
+    timer.start("clip OSM document to boundary");
     if let Some(pts) = clip_pts {
         map.streets.boundary_polygon = Ring::deduping_new(map.streets.gps_bounds.convert(&pts))
             .unwrap()
             .into_polygon();
-        doc.clip(&map.streets.boundary_polygon);
+        doc.clip(&map.streets.boundary_polygon, timer);
     } else {
         map.streets.boundary_polygon = map.streets.gps_bounds.to_bounds().get_rectangle();
         // No need to clip the Document in this case.
     }
+    timer.stop("clip OSM document to boundary");
 
     streets_reader::detect_country_code(&mut map.streets);
 
@@ -54,6 +60,7 @@ pub fn extract_osm(
     let mut bus_routes_on_roads: MultiMap<WayID, String> = MultiMap::new();
     let mut crossing_nodes = HashSet::new();
     let mut barrier_nodes = Vec::new();
+    let mut extra_pois = Vec::new();
 
     timer.start_iter("processing OSM nodes", doc.nodes.len());
     for (id, node) in &doc.nodes {
@@ -75,6 +82,26 @@ pub fn extract_osm(
         // TODO Any kind of barrier?
         if node.tags.is("barrier", "bollard") {
             barrier_nodes.push((*id, node.pt.to_hashable()));
+        }
+
+        if node.tags.is("railway", "station") {
+            if let Some(network) = node.tags.get("network") {
+                if let Some(name) = node.tags.get("name") {
+                    // network can be ; separated, like
+                    // https://www.openstreetmap.org/node/3663368460
+                    if network.contains("London Underground") {
+                        extra_pois.push(ExtraPOI {
+                            pt: node.pt,
+                            kind: ExtraPOIType::LondonUndergroundStation(name.to_string()),
+                        });
+                    } else if network.contains("National Rail") {
+                        extra_pois.push(ExtraPOI {
+                            pt: node.pt,
+                            kind: ExtraPOIType::NationalRailStation(name.to_string()),
+                        });
+                    }
+                }
+            }
         }
     }
 
@@ -225,7 +252,6 @@ pub fn extract_osm(
     }
 
     // Special case the coastline.
-    println!("{} ways of coastline", coastline_groups.len());
     for polygon in glue_multipolygon(RelationID(-1), coastline_groups, Some(&boundary)) {
         let mut osm_tags = Tags::empty();
         osm_tags.insert("water", "ocean");
@@ -286,7 +312,10 @@ pub fn extract_osm(
     });
 
     timer.start("find service roads crossing parking lots");
-    find_parking_aisles(map, &mut out.roads);
+    // TODO Something's crashing in one map, no time to investigate
+    if map.name != abstio::MapName::new("au", "melbourne", "maribyrnong") {
+        find_parking_aisles(map, &mut out.roads);
+    }
     timer.stop("find service roads crossing parking lots");
 
     Extract {
@@ -295,6 +324,7 @@ pub fn extract_osm(
         bus_routes_on_roads,
         crossing_nodes,
         barrier_nodes,
+        extra_pois,
     }
 }
 
